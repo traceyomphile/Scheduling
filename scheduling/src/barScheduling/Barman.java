@@ -12,17 +12,17 @@
 
 package barScheduling;
 
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.util.Comparator;
+import java.util.Locale;
+import java.util.Scanner;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.io.File;
-import java.io.FileWriter;
-import java.util.Locale;
-import java.util.Scanner;
 
 public class Barman extends Thread {
 
@@ -340,32 +340,29 @@ public class Barman extends Thread {
     
     
     private void recordCompletedOrder(DrinkOrder order) throws IOException {
-    	// THIS IS THE ONLY FUNCTION YOU MAY CHANGE
+        // THIS IS THE ONLY FUNCTION YOU MAY CHANGE
+
+        Locale localeSA = Locale.forLanguageTag("en-ZA");
+
         File resultsDir = new File("results");
         if (!resultsDir.exists() && !resultsDir.mkdirs()) {
             throw new IOException("Could not create results directory");
         }
 
-        /*
-        * Database-style CSV structure:
-        *   runs.csv          -> one row per simulation run
-        *   processes.csv     -> one row per patron/process per run
-        *   cpu_bursts.csv    -> one row per drink order / CPU burst
-        *   burst_metrics.csv -> one row of timing metrics per CPU burst
-        */
-
         long simStart = SchedulingSimulation.simStartTime;
 
-        String workloadId = "N" + SchedulingSimulation.noPatrons
+        int patronId = order.getOrderer();
+
+        String workloadId =
+                "N" + SchedulingSimulation.noPatrons
                 + "_Seed" + SchedulingSimulation.seed;
 
-        String runId = schedulerName
+        String runId =
+                schedulerName
                 + "_N" + SchedulingSimulation.noPatrons
                 + "_CS" + switchTime
-                + "_Seed" + SchedulingSimulation.seed
-                + "_Start" + simStart;
+                + "_Seed" + SchedulingSimulation.seed;
 
-        int patronId = order.getOrderer();
         String processId = runId + "_P" + patronId;
         String burstId = runId + "_B" + order.getSequenceNumber();
 
@@ -384,13 +381,24 @@ public class Barman extends Thread {
             expectedBurstCount = SchedulingSimulation.drinksPerPatron[patronId];
         }
 
+        // Relative times: measured from the start of the simulation.
         long orderArrivalTime = order.getArrivalTime() - simStart;
         long serviceStartTime = order.getServiceStartTime() - simStart;
         long completionTime = order.getCompletionTime() - simStart;
 
+        // Durations.
+        long burstTime = order.getExecutionTime();
+        long waitingTime = serviceStartTime - orderArrivalTime;
+        long responseTime = serviceStartTime - orderArrivalTime;
+        long turnaroundTime = completionTime - orderArrivalTime;
+
         String drinkName = order.getDrinkName().replace("\"", "\"\"");
 
-        // ---------- runs table ----------
+        // ---------------------------------------------------------------------
+        // runs.csv
+        // One row per simulation run.
+        // ---------------------------------------------------------------------
+
         File runsFile = new File(resultsDir, "runs.csv");
         boolean runAlreadyWritten = false;
 
@@ -415,25 +423,36 @@ public class Barman extends Thread {
 
             try (FileWriter writer = new FileWriter(runsFile, true)) {
                 if (writeHeader) {
-                    writer.write("RunID,WorkloadID,SchedulerName,SchedulerCode,NumberOfPatrons,ContextSwitchTime,Seed,SimulationStartTime\n");
+                    writer.write(
+                            "RunID,"
+                            + "WorkloadID,"
+                            + "SchedulerName,"
+                            + "SchedulerCode,"
+                            + "NumberOfPatrons,"
+                            + "ContextSwitchTime,"
+                            + "Seed\n"
+                    );
                 }
 
                 writer.write(String.format(
-                        Locale.US,
-                        "%s,%s,%s,%d,%d,%d,%d,%d%n",
+                        localeSA,
+                        "%s,%s,%s,%d,%d,%d,%d%n",
                         runId,
                         workloadId,
                         schedulerName,
                         schedAlg,
                         SchedulingSimulation.noPatrons,
                         switchTime,
-                        SchedulingSimulation.seed,
-                        simStart
+                        SchedulingSimulation.seed
                 ));
             }
         }
 
-        // ---------- processes table ----------
+        // ---------------------------------------------------------------------
+        // processes.csv
+        // One row per patron/process per run.
+        // ---------------------------------------------------------------------
+
         File processesFile = new File(resultsDir, "processes.csv");
         boolean processAlreadyWritten = false;
 
@@ -458,11 +477,17 @@ public class Barman extends Thread {
 
             try (FileWriter writer = new FileWriter(processesFile, true)) {
                 if (writeHeader) {
-                    writer.write("ProcessID,RunID,PatronID,PatronArrivalTime,ExpectedBurstCount\n");
+                    writer.write(
+                            "ProcessID,"
+                            + "RunID,"
+                            + "PatronID,"
+                            + "ArrivalTime,"
+                            + "ExpectedBurstCount\n"
+                    );
                 }
 
                 writer.write(String.format(
-                        Locale.US,
+                        localeSA,
                         "%s,%s,%d,%d,%d%n",
                         processId,
                         runId,
@@ -473,25 +498,41 @@ public class Barman extends Thread {
             }
         }
 
-        // ---------- CPU bursts table ----------
+        // ---------------------------------------------------------------------
+        // cpu_bursts.csv
+        // One row per drink order / CPU burst.
+        // ---------------------------------------------------------------------
+
         File burstsFile = new File(resultsDir, "cpu_bursts.csv");
         boolean writeBurstsHeader = !burstsFile.exists() || burstsFile.length() == 0;
 
         try (FileWriter writer = new FileWriter(burstsFile, true)) {
             if (writeBurstsHeader) {
-                writer.write("BurstID,ProcessID,RunID,BurstSequence,DrinkName,BurstTime,OrderArrivalTime,ServiceStartTime,CompletionTime,QueueLevel,Priority\n");
+                writer.write(
+                        "BurstID,"
+                        + "ProcessID,"
+                        + "RunID,"
+                        + "BurstSequence,"
+                        + "DrinkName,"
+                        + "ArrivalTime,"
+                        + "BurstTime,"
+                        + "ServiceStartTime,"
+                        + "CompletionTime,"
+                        + "QueueLevel,"
+                        + "Priority\n"
+                );
             }
 
             writer.write(String.format(
-                    Locale.US,
+                    localeSA,
                     "%s,%s,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d%n",
                     burstId,
                     processId,
                     runId,
                     order.getSequenceNumber(),
                     drinkName,
-                    order.getExecutionTime(),
                     orderArrivalTime,
+                    burstTime,
                     serviceStartTime,
                     completionTime,
                     order.getQueueLevel(),
@@ -499,26 +540,36 @@ public class Barman extends Thread {
             ));
         }
 
-        // ---------- burst metrics table ----------
+        // ---------------------------------------------------------------------
+        // burst_metrics.csv
+        // One row per burst containing the performance metrics.
+        // ---------------------------------------------------------------------
+
         File metricsFile = new File(resultsDir, "burst_metrics.csv");
         boolean writeMetricsHeader = !metricsFile.exists() || metricsFile.length() == 0;
 
         try (FileWriter writer = new FileWriter(metricsFile, true)) {
             if (writeMetricsHeader) {
-                writer.write("BurstID,ProcessID,RunID,WaitingTime,ResponseTime,TurnaroundTime\n");
+                writer.write(
+                        "BurstID,"
+                        + "ProcessID,"
+                        + "RunID,"
+                        + "WaitingTime,"
+                        + "ResponseTime,"
+                        + "TurnaroundTime\n"
+                );
             }
 
             writer.write(String.format(
-                    Locale.US,
+                    localeSA,
                     "%s,%s,%s,%d,%d,%d%n",
                     burstId,
                     processId,
                     runId,
-                    order.getWaitingTime(),
-                    order.getResponseTime(),
-                    order.getTurnaroundTime()
+                    waitingTime,
+                    responseTime,
+                    turnaroundTime
             ));
         }
     }
-
 }
