@@ -1,0 +1,50 @@
+primary_key	drink_name	arrival_time	prepTime
+0_1	Beer	825	25
+0_2	Draft Beer	953	50
+0_3	Cider	1104	25
+1_1	Pina Colada	1320	100
+1_2	Mojito	1541	75
+1_3	Tequila shot	1728	20
+1_4	Vodka shot	1752	20
+2_1	Vodka shot	2309	20
+2_2	Mojito	2333	75
+3_1	Draft Beer	2363	50
+4_1	Beer	2560	25
+3_2	Martini	2686	60
+5_1	Beer	2711	25
+4_2	White Wine	2729	25
+6_1	Beer	2844	25
+3_3	Mojito	2858	75
+5_2	Red Wine	2903	25
+7_1	Gin and Tonic	2927	40
+6_2	Draft Beer	2992	50
+4_3	Cider	2996	25
+3_4	White Wine	3103	25
+5_3	B52	3190	200
+7_2	Draft Beer	3214	50
+6_3	Pina Colada	3272	100
+4_4	Red Wine	3319	25
+3_5	Cider	3414	25
+8_1	Cider	3415	25
+5_4	Cider	3498	25
+7_3	B52	3662	200
+9_1	Margarita	3732	75
+6_4	Draft Beer	3802	50
+4_5	Cider	3881	25
+8_2	Cosmopolitan	3922	65
+5_5	White Wine	3966	25
+7_4	Tequila shot	4098	20
+9_2	Draft Beer	4269	50
+6_5	Draft Beer	4370	50
+4_6	White Wine	4420	25
+8_3	Cosmopolitan	4463	65
+5_6	Pina Colada	4609	100
+9_3	Cider	4668	25
+6_6	Vodka shot	4738	20
+8_4	White Wine	4819	25
+4_7	Mojito	4835	75
+6_7	Gin and Tonic	4984	40
+9_4	Vodka shot	5035	20
+8_5	Margarita	5177	75
+8_6	Margarita	5401	75
+8_7	Red Wine	5558	25

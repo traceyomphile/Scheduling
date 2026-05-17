@@ -338,10 +338,10 @@ public class Barman extends Thread {
     
 //=NO CHANGE AREA ENDS=========================================================   
       
-    
-    
+       
     private void recordCompletedOrder(DrinkOrder order) throws IOException {
         Locale csvLocale = Locale.US;
+        String delimiter = "\t";
 
         // ------------------------------------------------------------
         // 1. Create results directory if it does not exist
@@ -375,8 +375,8 @@ public class Barman extends Thread {
 
         // ------------------------------------------------------------
         // 4. Build file names
-        // Format: algName_noPatrons_seed.csv
-        // Example: FCFS_30_30.csv
+        // Format: algName_noPatrons_seed.txt
+        // Example: FCFS_30_30.txt
         // ------------------------------------------------------------
 
         String fileName = schedulerName
@@ -384,30 +384,17 @@ public class Barman extends Thread {
                 + SchedulingSimulation.noPatrons
                 + "_"
                 + SchedulingSimulation.seed
-                + ".csv";
+                + ".txt";
 
         File orderDataFile = new File(orderDataDir, fileName);
         File orderMetricsFile = new File(orderMetricsDir, fileName);
 
         // ------------------------------------------------------------
-        // 5. Extract basic order information
+        // 5. Build primary key: patronID_seqNum
+        // Example: 5_3
         // ------------------------------------------------------------
 
         int patronId = order.getOrderer();
-
-        /*
-        * seqNum is per patron.
-        *
-        * To get it without changing DrinkOrder or Patron,
-        * we count how many orders this patron already has in the OrderData file.
-        *
-        * If patron 5 already has:
-        *   5_1
-        *   5_2
-        *
-        * then this new order becomes:
-        *   5_3
-        */
         int seqNum = 1;
 
         if (orderDataFile.exists()) {
@@ -423,7 +410,7 @@ public class Barman extends Thread {
                         continue;
                     }
 
-                    String[] parts = line.split(",", -1);
+                    String[] parts = line.split(delimiter, -1);
 
                     if (parts.length > 0) {
                         String primaryKey = parts[0];
@@ -439,29 +426,30 @@ public class Barman extends Thread {
 
         String orderPrimaryKey = patronId + "_" + seqNum;
 
-        String drinkName = order.getDrinkName().replace("\"", "\"\"");
+        // ------------------------------------------------------------
+        // 6. Extract relative timing values
+        // ------------------------------------------------------------
 
-        /*
-        * Relative arrival time.
-        *
-        * order.getArrivalTime() is absolute System.currentTimeMillis().
-        * Subtracting SchedulingSimulation.simStartTime makes it relative
-        * to the start of the simulation.
-        */
-        long arrivalTime = order.getArrivalTime() - SchedulingSimulation.simStartTime;
+        long simStart = SchedulingSimulation.simStartTime;
+
+        long arrivalTime = order.getArrivalTime() - simStart;
+        long serviceStartTime = order.getServiceStartTime() - simStart;
+        long completionTime = order.getCompletionTime() - simStart;
 
         long prepTime = order.getExecutionTime();
-
-        // ------------------------------------------------------------
-        // 6. Compute metrics
-        // ------------------------------------------------------------
-
-        long serviceStartTime = order.getServiceStartTime() - SchedulingSimulation.simStartTime;
-        long completionTime = order.getCompletionTime() - SchedulingSimulation.simStartTime;
 
         long waitingTime = serviceStartTime - arrivalTime;
         long responseTime = serviceStartTime - arrivalTime;
         long turnaroundTime = completionTime - arrivalTime;
+
+        String drinkName = order.getDrinkName();
+
+        /*
+        * Remove tabs/newlines from drink names so the text table does not break.
+        */
+        drinkName = drinkName.replace("\t", " ")
+                            .replace("\n", " ")
+                            .replace("\r", " ");
 
         // ------------------------------------------------------------
         // 7. Append to OrderData file
@@ -473,15 +461,23 @@ public class Barman extends Thread {
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(orderDataFile, true))) {
             if (writeOrderHeader) {
-                writer.println("primary_key,drink_name,arrival_time,prepTime");
+                writer.println(
+                        "primary_key" + delimiter
+                        + "drink_name" + delimiter
+                        + "arrival_time" + delimiter
+                        + "prepTime"
+                );
             }
 
             writer.printf(
                     csvLocale,
-                    "%s,\"%s\",%d,%d%n",
+                    "%s%s%s%s%d%s%d%n",
                     orderPrimaryKey,
+                    delimiter,
                     drinkName,
+                    delimiter,
                     arrivalTime,
+                    delimiter,
                     prepTime
             );
         }
@@ -496,15 +492,23 @@ public class Barman extends Thread {
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(orderMetricsFile, true))) {
             if (writeMetricsHeader) {
-                writer.println("primary_key,waiting_time,response_time,turnaround_time");
+                writer.println(
+                        "primary_key" + delimiter
+                        + "waiting_time" + delimiter
+                        + "response_time" + delimiter
+                        + "turnaround_time"
+                );
             }
 
             writer.printf(
                     csvLocale,
-                    "%s,%d,%d,%d%n",
+                    "%s%s%d%s%d%s%d%n",
                     orderPrimaryKey,
+                    delimiter,
                     waitingTime,
+                    delimiter,
                     responseTime,
+                    delimiter,
                     turnaroundTime
             );
         }
