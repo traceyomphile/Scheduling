@@ -15,6 +15,7 @@ package barScheduling;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.Comparator;
 import java.util.Locale;
 import java.util.Scanner;
@@ -340,236 +341,172 @@ public class Barman extends Thread {
     
     
     private void recordCompletedOrder(DrinkOrder order) throws IOException {
-        // THIS IS THE ONLY FUNCTION YOU MAY CHANGE
+        Locale csvLocale = Locale.US;
 
-        Locale localeSA = Locale.forLanguageTag("en-ZA");
+        // ------------------------------------------------------------
+        // 1. Create results directory if it does not exist
+        // ------------------------------------------------------------
 
         File resultsDir = new File("results");
+
         if (!resultsDir.exists() && !resultsDir.mkdirs()) {
             throw new IOException("Could not create results directory");
         }
 
-        long simStart = SchedulingSimulation.simStartTime;
+        // ------------------------------------------------------------
+        // 2. Create OrderData directory if it does not exist
+        // ------------------------------------------------------------
+
+        File orderDataDir = new File(resultsDir, "OrderData");
+
+        if (!orderDataDir.exists() && !orderDataDir.mkdirs()) {
+            throw new IOException("Could not create OrderData directory");
+        }
+
+        // ------------------------------------------------------------
+        // 3. Create ordermetrics_dir directory if it does not exist
+        // ------------------------------------------------------------
+
+        File orderMetricsDir = new File(resultsDir, "ordermetrics_dir");
+
+        if (!orderMetricsDir.exists() && !orderMetricsDir.mkdirs()) {
+            throw new IOException("Could not create ordermetrics_dir directory");
+        }
+
+        // ------------------------------------------------------------
+        // 4. Build file names
+        // Format: algName_noPatrons_seed.csv
+        // Example: FCFS_30_30.csv
+        // ------------------------------------------------------------
+
+        String fileName = schedulerName
+                + "_"
+                + SchedulingSimulation.noPatrons
+                + "_"
+                + SchedulingSimulation.seed
+                + ".csv";
+
+        File orderDataFile = new File(orderDataDir, fileName);
+        File orderMetricsFile = new File(orderMetricsDir, fileName);
+
+        // ------------------------------------------------------------
+        // 5. Extract basic order information
+        // ------------------------------------------------------------
 
         int patronId = order.getOrderer();
 
-        String workloadId =
-                "N" + SchedulingSimulation.noPatrons
-                + "_Seed" + SchedulingSimulation.seed;
+        /*
+        * seqNum is per patron.
+        *
+        * To get it without changing DrinkOrder or Patron,
+        * we count how many orders this patron already has in the OrderData file.
+        *
+        * If patron 5 already has:
+        *   5_1
+        *   5_2
+        *
+        * then this new order becomes:
+        *   5_3
+        */
+        int seqNum = 1;
 
-        String runId =
-                schedulerName
-                + "_N" + SchedulingSimulation.noPatrons
-                + "_CS" + switchTime
-                + "_Seed" + SchedulingSimulation.seed;
+        if (orderDataFile.exists()) {
+            try (Scanner scanner = new Scanner(orderDataFile)) {
+                if (scanner.hasNextLine()) {
+                    scanner.nextLine(); // skip header
+                }
 
-        String processId = runId + "_P" + patronId;
-        String burstId = runId + "_B" + order.getSequenceNumber();
+                while (scanner.hasNextLine()) {
+                    String line = scanner.nextLine().trim();
 
-        int patronArrivalTime = -1;
-        int expectedBurstCount = -1;
+                    if (line.isEmpty()) {
+                        continue;
+                    }
 
-        if (SchedulingSimulation.arrivalTimes != null
-                && patronId >= 0
-                && patronId < SchedulingSimulation.arrivalTimes.length) {
-            patronArrivalTime = SchedulingSimulation.arrivalTimes[patronId];
+                    String[] parts = line.split(",", -1);
+
+                    if (parts.length > 0) {
+                        String primaryKey = parts[0];
+                        String patronPrefix = patronId + "_";
+
+                        if (primaryKey.startsWith(patronPrefix)) {
+                            seqNum++;
+                        }
+                    }
+                }
+            }
         }
 
-        if (SchedulingSimulation.drinksPerPatron != null
-                && patronId >= 0
-                && patronId < SchedulingSimulation.drinksPerPatron.length) {
-            expectedBurstCount = SchedulingSimulation.drinksPerPatron[patronId];
-        }
-
-        // Relative times: measured from the start of the simulation.
-        long orderArrivalTime = order.getArrivalTime() - simStart;
-        long serviceStartTime = order.getServiceStartTime() - simStart;
-        long completionTime = order.getCompletionTime() - simStart;
-
-        // Durations.
-        long burstTime = order.getExecutionTime();
-        long waitingTime = serviceStartTime - orderArrivalTime;
-        long responseTime = serviceStartTime - orderArrivalTime;
-        long turnaroundTime = completionTime - orderArrivalTime;
+        String orderPrimaryKey = patronId + "_" + seqNum;
 
         String drinkName = order.getDrinkName().replace("\"", "\"\"");
 
-        // ---------------------------------------------------------------------
-        // runs.csv
-        // One row per simulation run.
-        // ---------------------------------------------------------------------
+        /*
+        * Relative arrival time.
+        *
+        * order.getArrivalTime() is absolute System.currentTimeMillis().
+        * Subtracting SchedulingSimulation.simStartTime makes it relative
+        * to the start of the simulation.
+        */
+        long arrivalTime = order.getArrivalTime() - SchedulingSimulation.simStartTime;
 
-        File runsFile = new File(resultsDir, "runs.csv");
-        boolean runAlreadyWritten = false;
+        long prepTime = order.getExecutionTime();
 
-        if (runsFile.exists()) {
-            try (Scanner scanner = new Scanner(runsFile)) {
-                if (scanner.hasNextLine()) {
-                    scanner.nextLine(); // skip header
-                }
+        // ------------------------------------------------------------
+        // 6. Compute metrics
+        // ------------------------------------------------------------
 
-                while (scanner.hasNextLine()) {
-                    String line = scanner.nextLine();
-                    if (line.startsWith(runId + ",")) {
-                        runAlreadyWritten = true;
-                        break;
-                    }
-                }
-            }
-        }
+        long serviceStartTime = order.getServiceStartTime() - SchedulingSimulation.simStartTime;
+        long completionTime = order.getCompletionTime() - SchedulingSimulation.simStartTime;
 
-        if (!runAlreadyWritten) {
-            boolean writeHeader = !runsFile.exists() || runsFile.length() == 0;
+        long waitingTime = serviceStartTime - arrivalTime;
+        long responseTime = serviceStartTime - arrivalTime;
+        long turnaroundTime = completionTime - arrivalTime;
 
-            try (FileWriter writer = new FileWriter(runsFile, true)) {
-                if (writeHeader) {
-                    writer.write(
-                            "RunID,"
-                            + "WorkloadID,"
-                            + "SchedulerName,"
-                            + "SchedulerCode,"
-                            + "NumberOfPatrons,"
-                            + "ContextSwitchTime,"
-                            + "Seed\n"
-                    );
-                }
+        // ------------------------------------------------------------
+        // 7. Append to OrderData file
+        // Columns:
+        // primary_key, drink_name, arrival_time, prepTime
+        // ------------------------------------------------------------
 
-                writer.write(String.format(
-                        localeSA,
-                        "%s,%s,%s,%d,%d,%d,%d%n",
-                        runId,
-                        workloadId,
-                        schedulerName,
-                        schedAlg,
-                        SchedulingSimulation.noPatrons,
-                        switchTime,
-                        SchedulingSimulation.seed
-                ));
-            }
-        }
+        boolean writeOrderHeader = !orderDataFile.exists() || orderDataFile.length() == 0;
 
-        // ---------------------------------------------------------------------
-        // processes.csv
-        // One row per patron/process per run.
-        // ---------------------------------------------------------------------
-
-        File processesFile = new File(resultsDir, "processes.csv");
-        boolean processAlreadyWritten = false;
-
-        if (processesFile.exists()) {
-            try (Scanner scanner = new Scanner(processesFile)) {
-                if (scanner.hasNextLine()) {
-                    scanner.nextLine(); // skip header
-                }
-
-                while (scanner.hasNextLine()) {
-                    String line = scanner.nextLine();
-                    if (line.startsWith(processId + ",")) {
-                        processAlreadyWritten = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!processAlreadyWritten) {
-            boolean writeHeader = !processesFile.exists() || processesFile.length() == 0;
-
-            try (FileWriter writer = new FileWriter(processesFile, true)) {
-                if (writeHeader) {
-                    writer.write(
-                            "ProcessID,"
-                            + "RunID,"
-                            + "PatronID,"
-                            + "ArrivalTime,"
-                            + "ExpectedBurstCount\n"
-                    );
-                }
-
-                writer.write(String.format(
-                        localeSA,
-                        "%s,%s,%d,%d,%d%n",
-                        processId,
-                        runId,
-                        patronId,
-                        patronArrivalTime,
-                        expectedBurstCount
-                ));
-            }
-        }
-
-        // ---------------------------------------------------------------------
-        // cpu_bursts.csv
-        // One row per drink order / CPU burst.
-        // ---------------------------------------------------------------------
-
-        File burstsFile = new File(resultsDir, "cpu_bursts.csv");
-        boolean writeBurstsHeader = !burstsFile.exists() || burstsFile.length() == 0;
-
-        try (FileWriter writer = new FileWriter(burstsFile, true)) {
-            if (writeBurstsHeader) {
-                writer.write(
-                        "BurstID,"
-                        + "ProcessID,"
-                        + "RunID,"
-                        + "BurstSequence,"
-                        + "DrinkName,"
-                        + "ArrivalTime,"
-                        + "BurstTime,"
-                        + "ServiceStartTime,"
-                        + "CompletionTime,"
-                        + "QueueLevel,"
-                        + "Priority\n"
-                );
+        try (PrintWriter writer = new PrintWriter(new FileWriter(orderDataFile, true))) {
+            if (writeOrderHeader) {
+                writer.println("primary_key,drink_name,arrival_time,prepTime");
             }
 
-            writer.write(String.format(
-                    localeSA,
-                    "%s,%s,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d%n",
-                    burstId,
-                    processId,
-                    runId,
-                    order.getSequenceNumber(),
+            writer.printf(
+                    csvLocale,
+                    "%s,\"%s\",%d,%d%n",
+                    orderPrimaryKey,
                     drinkName,
-                    orderArrivalTime,
-                    burstTime,
-                    serviceStartTime,
-                    completionTime,
-                    order.getQueueLevel(),
-                    order.getPriority()
-            ));
+                    arrivalTime,
+                    prepTime
+            );
         }
 
-        // ---------------------------------------------------------------------
-        // burst_metrics.csv
-        // One row per burst containing the performance metrics.
-        // ---------------------------------------------------------------------
+        // ------------------------------------------------------------
+        // 8. Append to ordermetrics_dir file
+        // Columns:
+        // primary_key, waiting_time, response_time, turnaround_time
+        // ------------------------------------------------------------
 
-        File metricsFile = new File(resultsDir, "burst_metrics.csv");
-        boolean writeMetricsHeader = !metricsFile.exists() || metricsFile.length() == 0;
+        boolean writeMetricsHeader = !orderMetricsFile.exists() || orderMetricsFile.length() == 0;
 
-        try (FileWriter writer = new FileWriter(metricsFile, true)) {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(orderMetricsFile, true))) {
             if (writeMetricsHeader) {
-                writer.write(
-                        "BurstID,"
-                        + "ProcessID,"
-                        + "RunID,"
-                        + "WaitingTime,"
-                        + "ResponseTime,"
-                        + "TurnaroundTime\n"
-                );
+                writer.println("primary_key,waiting_time,response_time,turnaround_time");
             }
 
-            writer.write(String.format(
-                    localeSA,
-                    "%s,%s,%s,%d,%d,%d%n",
-                    burstId,
-                    processId,
-                    runId,
+            writer.printf(
+                    csvLocale,
+                    "%s,%d,%d,%d%n",
+                    orderPrimaryKey,
                     waitingTime,
                     responseTime,
                     turnaroundTime
-            ));
+            );
         }
     }
 }
