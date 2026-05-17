@@ -341,7 +341,184 @@ public class Barman extends Thread {
     
     private void recordCompletedOrder(DrinkOrder order) throws IOException {
     	// THIS IS THE ONLY FUNCTION YOU MAY CHANGE
-        
+        File resultsDir = new File("results");
+        if (!resultsDir.exists() && !resultsDir.mkdirs()) {
+            throw new IOException("Could not create results directory");
+        }
+
+        /*
+        * Database-style CSV structure:
+        *   runs.csv          -> one row per simulation run
+        *   processes.csv     -> one row per patron/process per run
+        *   cpu_bursts.csv    -> one row per drink order / CPU burst
+        *   burst_metrics.csv -> one row of timing metrics per CPU burst
+        */
+
+        long simStart = SchedulingSimulation.simStartTime;
+
+        String workloadId = "N" + SchedulingSimulation.noPatrons
+                + "_Seed" + SchedulingSimulation.seed;
+
+        String runId = schedulerName
+                + "_N" + SchedulingSimulation.noPatrons
+                + "_CS" + switchTime
+                + "_Seed" + SchedulingSimulation.seed
+                + "_Start" + simStart;
+
+        int patronId = order.getOrderer();
+        String processId = runId + "_P" + patronId;
+        String burstId = runId + "_B" + order.getSequenceNumber();
+
+        int patronArrivalTime = -1;
+        int expectedBurstCount = -1;
+
+        if (SchedulingSimulation.arrivalTimes != null
+                && patronId >= 0
+                && patronId < SchedulingSimulation.arrivalTimes.length) {
+            patronArrivalTime = SchedulingSimulation.arrivalTimes[patronId];
+        }
+
+        if (SchedulingSimulation.drinksPerPatron != null
+                && patronId >= 0
+                && patronId < SchedulingSimulation.drinksPerPatron.length) {
+            expectedBurstCount = SchedulingSimulation.drinksPerPatron[patronId];
+        }
+
+        long orderArrivalTime = order.getArrivalTime() - simStart;
+        long serviceStartTime = order.getServiceStartTime() - simStart;
+        long completionTime = order.getCompletionTime() - simStart;
+
+        String drinkName = order.getDrinkName().replace("\"", "\"\"");
+
+        // ---------- runs table ----------
+        File runsFile = new File(resultsDir, "runs.csv");
+        boolean runAlreadyWritten = false;
+
+        if (runsFile.exists()) {
+            try (Scanner scanner = new Scanner(runsFile)) {
+                if (scanner.hasNextLine()) {
+                    scanner.nextLine(); // skip header
+                }
+
+                while (scanner.hasNextLine()) {
+                    String line = scanner.nextLine();
+                    if (line.startsWith(runId + ",")) {
+                        runAlreadyWritten = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!runAlreadyWritten) {
+            boolean writeHeader = !runsFile.exists() || runsFile.length() == 0;
+
+            try (FileWriter writer = new FileWriter(runsFile, true)) {
+                if (writeHeader) {
+                    writer.write("RunID,WorkloadID,SchedulerName,SchedulerCode,NumberOfPatrons,ContextSwitchTime,Seed,SimulationStartTime\n");
+                }
+
+                writer.write(String.format(
+                        Locale.US,
+                        "%s,%s,%s,%d,%d,%d,%d,%d%n",
+                        runId,
+                        workloadId,
+                        schedulerName,
+                        schedAlg,
+                        SchedulingSimulation.noPatrons,
+                        switchTime,
+                        SchedulingSimulation.seed,
+                        simStart
+                ));
+            }
+        }
+
+        // ---------- processes table ----------
+        File processesFile = new File(resultsDir, "processes.csv");
+        boolean processAlreadyWritten = false;
+
+        if (processesFile.exists()) {
+            try (Scanner scanner = new Scanner(processesFile)) {
+                if (scanner.hasNextLine()) {
+                    scanner.nextLine(); // skip header
+                }
+
+                while (scanner.hasNextLine()) {
+                    String line = scanner.nextLine();
+                    if (line.startsWith(processId + ",")) {
+                        processAlreadyWritten = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!processAlreadyWritten) {
+            boolean writeHeader = !processesFile.exists() || processesFile.length() == 0;
+
+            try (FileWriter writer = new FileWriter(processesFile, true)) {
+                if (writeHeader) {
+                    writer.write("ProcessID,RunID,PatronID,PatronArrivalTime,ExpectedBurstCount\n");
+                }
+
+                writer.write(String.format(
+                        Locale.US,
+                        "%s,%s,%d,%d,%d%n",
+                        processId,
+                        runId,
+                        patronId,
+                        patronArrivalTime,
+                        expectedBurstCount
+                ));
+            }
+        }
+
+        // ---------- CPU bursts table ----------
+        File burstsFile = new File(resultsDir, "cpu_bursts.csv");
+        boolean writeBurstsHeader = !burstsFile.exists() || burstsFile.length() == 0;
+
+        try (FileWriter writer = new FileWriter(burstsFile, true)) {
+            if (writeBurstsHeader) {
+                writer.write("BurstID,ProcessID,RunID,BurstSequence,DrinkName,BurstTime,OrderArrivalTime,ServiceStartTime,CompletionTime,QueueLevel,Priority\n");
+            }
+
+            writer.write(String.format(
+                    Locale.US,
+                    "%s,%s,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d%n",
+                    burstId,
+                    processId,
+                    runId,
+                    order.getSequenceNumber(),
+                    drinkName,
+                    order.getExecutionTime(),
+                    orderArrivalTime,
+                    serviceStartTime,
+                    completionTime,
+                    order.getQueueLevel(),
+                    order.getPriority()
+            ));
+        }
+
+        // ---------- burst metrics table ----------
+        File metricsFile = new File(resultsDir, "burst_metrics.csv");
+        boolean writeMetricsHeader = !metricsFile.exists() || metricsFile.length() == 0;
+
+        try (FileWriter writer = new FileWriter(metricsFile, true)) {
+            if (writeMetricsHeader) {
+                writer.write("BurstID,ProcessID,RunID,WaitingTime,ResponseTime,TurnaroundTime\n");
+            }
+
+            writer.write(String.format(
+                    Locale.US,
+                    "%s,%s,%s,%d,%d,%d%n",
+                    burstId,
+                    processId,
+                    runId,
+                    order.getWaitingTime(),
+                    order.getResponseTime(),
+                    order.getTurnaroundTime()
+            ));
+        }
     }
 
 }
