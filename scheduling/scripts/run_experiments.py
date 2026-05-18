@@ -26,7 +26,6 @@ from pathlib import Path
 
 from compute_patron_metrics import compute_patron_metrics_for_file
 from compute_stats_metrics import compute_stats_metrics_for_file
-from plot_metric_graphs import create_graphs_for_file
 
 
 SCHEDULER_NAMES = {
@@ -43,9 +42,6 @@ RESULT_DIRS = [
     "PatronData",
     "PatronMetrics",
     "StatMetrics",
-    "OrderMetricsGraphs",
-    "PatronMetricsGraphs",
-    "StatMetricsGraphs",
 ]
 
 
@@ -345,29 +341,6 @@ def main() -> int:
 
             if args.stop_on_failure:
                 break
-
-            continue
-
-        try:
-            create_graphs_for_file(
-                results_dir=results_dir,
-                file_name=experiment.file_name,
-            )
-
-        except Exception as exc:
-            failures += 1
-
-            write_failure_log(
-                logs_dir=logs_dir,
-                experiment=experiment,
-                stage="metric_graphs",
-                message=repr(exc),
-            )
-
-            if args.stop_on_failure:
-                break
-
-            continue
 
     if failures:
         print(f"Completed with {failures} failed attempt(s). Check logs/ for details.")

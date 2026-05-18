@@ -109,6 +109,19 @@ def maximum(values: list[float]) -> float:
     return max(values) if values else 0.0
 
 
+def median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+
+    sorted_values = sorted(values)
+    middle = len(sorted_values) // 2
+
+    if len(sorted_values) % 2 == 1:
+        return sorted_values[middle]
+
+    return (sorted_values[middle - 1] + sorted_values[middle]) / 2.0
+
+
 def population_std(values: list[float]) -> float:
     if not values:
         return 0.0
@@ -263,14 +276,20 @@ def compute_stats_metrics_for_file(
 
     row: dict[str, Any] = {
         "avg_waiting_time": average(waiting_values),
+        "median_waiting_time": median(waiting_values),
+        "std_waiting_time": population_std(waiting_values),
         "max_waiting_time": maximum(waiting_values),
         "min_waiting_time": minimum(waiting_values),
 
         "avg_response_time": average(response_values),
+        "median_response_time": median(response_values),
+        "std_response_time": population_std(response_values),
         "max_response_time": maximum(response_values),
         "min_response_time": minimum(response_values),
 
         "avg_turnaround_time": average(turnaround_values),
+        "median_turnaround_time": median(turnaround_values),
+        "std_turnaround_time": population_std(turnaround_values),
         "max_turnaround_time": maximum(turnaround_values),
         "min_turnaround_time": minimum(turnaround_values),
 
