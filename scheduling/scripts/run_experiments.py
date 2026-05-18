@@ -2,13 +2,13 @@
 """
 run_experiments.py
 
-Only script with a main() function.
-
-It runs the full set of scheduling simulation experiments, then calls helper
-modules after each successful Java run.
+Builds a batch of scheduling simulation experiments and runs each one through
+run_experiment.py.
 
 Important behaviour:
-    - At the start of a real run, results/ is deleted and recreated.
+    - It does NOT delete the whole results/ directory at the start.
+    - Each individual experiment clears only its own result/graph files before
+      it reruns.
     - make run ARGS output is NOT captured or hidden. It prints normally.
     - This script only controls its own final status output.
     - Failure logs are created only when a failure occurs.
@@ -18,57 +18,11 @@ from __future__ import annotations
 
 import argparse
 import random
-import shutil
-import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
-from compute_patron_metrics import compute_patron_metrics_for_file
-from compute_stats_metrics import compute_stats_metrics_for_file
-
-
-SCHEDULER_NAMES = {
-    0: "FCFS",
-    1: "SJF",
-    2: "PRIORITY",
-    3: "MLFQ",
-}
-
-
-RESULT_DIRS = [
-    "OrderData",
-    "OrderMetrics",
-    "PatronData",
-    "PatronMetrics",
-    "StatMetrics",
-]
-
-
-@dataclass(frozen=True)
-class Experiment:
-    scheduler_code: int
-    scheduler_name: str
-    seed: int
-    no_patrons: int
-    context_switch_time: int
-
-    @property
-    def args_string(self) -> str:
-        return (
-            f"{self.no_patrons} "
-            f"{self.scheduler_code} "
-            f"{self.context_switch_time} "
-            f"{self.seed}"
-        )
-
-    @property
-    def file_name(self) -> str:
-        return f"{self.scheduler_name}_{self.no_patrons}_{self.seed}.txt"
-
-    @property
-    def log_file_name(self) -> str:
-        return f"{self.scheduler_name}_{self.no_patrons}_{self.seed}"
+from run_experiment import Experiment, make_experiment, run_single_experiment
+from plot_metric_graphs import create_algo_metrics_graphs
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     default_project_root = script_path.parents[1]
 
     parser = argparse.ArgumentParser(
-        description="Run scheduling experiments and compute patron/stat metrics."
+        description="Run scheduling experiment batches and compute metrics/graphs."
     )
 
     parser.add_argument(
@@ -107,6 +61,12 @@ def parse_args() -> argparse.Namespace:
         help="Stop immediately after the first failed run.",
     )
 
+    parser.add_argument(
+        "--no-clean",
+        action="store_true",
+        help="Do not clear existing output files for each experiment before running.",
+    )
+
     return parser.parse_args()
 
 
@@ -133,6 +93,12 @@ def choose_no_patrons(
 def build_experiments(args: argparse.Namespace) -> list[Experiment]:
     experiments: list[Experiment] = []
 
+    if args.seed_start > args.seed_end:
+        raise ValueError("seed_start cannot be greater than seed_end.")
+
+    if args.sched_start > args.sched_end:
+        raise ValueError("sched_start cannot be greater than sched_end.")
+
     for seed in range(args.seed_start, args.seed_end + 1):
         selected_no_patrons = choose_no_patrons(
             seed=seed,
@@ -142,109 +108,23 @@ def build_experiments(args: argparse.Namespace) -> list[Experiment]:
         )
 
         for scheduler_code in range(args.sched_start, args.sched_end + 1):
-            scheduler_name = SCHEDULER_NAMES.get(
-                scheduler_code,
-                f"SCHED{scheduler_code}",
-            )
-
             for no_patrons in selected_no_patrons:
                 experiments.append(
-                    Experiment(
-                        scheduler_code=scheduler_code,
-                        scheduler_name=scheduler_name,
-                        seed=seed,
+                    make_experiment(
                         no_patrons=no_patrons,
+                        scheduler_code=scheduler_code,
                         context_switch_time=args.context_switch_time,
+                        seed=seed,
                     )
                 )
 
     return experiments
 
 
-def ensure_results_dirs(results_dir: Path) -> None:
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    for dirname in RESULT_DIRS:
-        (results_dir / dirname).mkdir(parents=True, exist_ok=True)
-
-
-def reset_results_dir(results_dir: Path) -> None:
-    """
-    Force clean the whole results directory at the start of the experiment batch.
-    """
-    if results_dir.exists():
-        shutil.rmtree(results_dir)
-
-    ensure_results_dirs(results_dir)
-
-
-def clear_existing_failure_logs(logs_dir: Path) -> None:
-    """
-    Clear old failure logs at the start of the experiment batch.
-    The directory is only recreated when a new failure occurs.
-    """
-    if logs_dir.exists():
-        shutil.rmtree(logs_dir)
-
-
-def write_failure_log(
-    logs_dir: Path,
-    experiment: Experiment,
-    stage: str,
-    message: str,
-) -> Path:
-    """
-    Create a per-run failure log.
-
-    File name format:
-        alg_noPatrons_seed
-    """
-    logs_dir.mkdir(parents=True, exist_ok=True)
-
-    log_path = logs_dir / experiment.log_file_name
-
-    with log_path.open("a", encoding="utf-8") as file:
-        file.write("=" * 80 + "\n")
-        file.write(f"stage: {stage}\n")
-        file.write(f"algorithm: {experiment.scheduler_name}\n")
-        file.write(f"scheduler_code: {experiment.scheduler_code}\n")
-        file.write(f"noPatrons: {experiment.no_patrons}\n")
-        file.write(f"seed: {experiment.seed}\n")
-        file.write(f"context_switch_time: {experiment.context_switch_time}\n")
-        file.write(f"args: {experiment.args_string}\n")
-        file.write("error:\n")
-        file.write(f"{message}\n")
-
-    return log_path
-
-
-def run_java_experiment(
-    experiment: Experiment,
-    project_root: Path,
-) -> int:
-    """
-    Run Java simulation.
-
-    Output is intentionally not captured, so make/java prints normally.
-    """
-    command = ["make", "run", f"ARGS={experiment.args_string}"]
-
-    completed = subprocess.run(
-        command,
-        cwd=project_root,
-        text=True,
-        check=False,
-    )
-
-    return completed.returncode
-
-
 def main() -> int:
     args = parse_args()
 
     project_root = args.project_root.resolve()
-    results_dir = project_root / "results"
-    logs_dir = project_root / "logs"
 
     if not project_root.exists():
         print(
@@ -275,72 +155,34 @@ def main() -> int:
         print(f"Dry run completed successfully. Planned {len(experiments)} simulation run(s).")
         return 0
 
-    # Force clean before running any combinations.
-    reset_results_dir(results_dir)
-    clear_existing_failure_logs(logs_dir)
-
     failures = 0
 
     for experiment in experiments:
-        return_code = run_java_experiment(
+        result = run_single_experiment(
             experiment=experiment,
             project_root=project_root,
+            clean_previous=not args.no_clean,
+            write_logs=True,
         )
 
-        if return_code != 0:
+        if not result.succeeded:
             failures += 1
-
-            write_failure_log(
-                logs_dir=logs_dir,
-                experiment=experiment,
-                stage="java_run",
-                message=f"Java run failed with return code {return_code}.",
-            )
 
             if args.stop_on_failure:
                 break
 
             continue
 
-        try:
-            compute_patron_metrics_for_file(
-                results_dir=results_dir,
-                file_name=experiment.file_name,
-            )
-
-        except Exception as exc:
-            failures += 1
-
-            write_failure_log(
-                logs_dir=logs_dir,
-                experiment=experiment,
-                stage="patron_metrics",
-                message=repr(exc),
-            )
-
-            if args.stop_on_failure:
-                break
-
-            continue
-
-        try:
-            compute_stats_metrics_for_file(
-                results_dir=results_dir,
-                file_name=experiment.file_name,
-            )
-
-        except Exception as exc:
-            failures += 1
-
-            write_failure_log(
-                logs_dir=logs_dir,
-                experiment=experiment,
-                stage="stat_metrics",
-                message=repr(exc),
-            )
-
-            if args.stop_on_failure:
-                break
+    try:
+        create_algo_metrics_graphs(project_root / "results")
+    except Exception as exc:
+        failures += 1
+        print(
+            f"Completed with {failures} failed attempt(s). "
+            f"Could not create algorithm metric graphs: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
     if failures:
         print(f"Completed with {failures} failed attempt(s). Check logs/ for details.")
