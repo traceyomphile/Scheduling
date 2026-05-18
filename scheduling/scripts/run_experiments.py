@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 run_experiments.py
@@ -7,25 +6,6 @@ This is the only script with a main() function.
 
 It runs the full set of simulation experiments, then calls helper modules after
 each successful Java run.
-
-Project layout expected:
-
-    <project_root>/
-    ├── Makefile
-    ├── results/
-    └── scripts/
-        ├── run_experiments.py
-        ├── compute_patron_metrics.py
-        └── compute_stats_metrics.py
-
-Experiment design:
-    sched in [0, 3]
-    seed in [1, 3]
-    s = 0
-    noPatrons sampled from [8, 50], three values per seed
-
-Java command:
-    make run ARGS="<noPatrons> <sched> <s> <seed>"
 
 No log files are created.
 No selected_noPatrons file is created.
@@ -306,7 +286,7 @@ def main() -> int:
 
         if return_code != 0:
             failures += 1
-            print(f"  FAILED with return code {return_code}.", file=sys.stderr)
+            print(f"  FAILED Java run with return code {return_code}.", file=sys.stderr)
 
             if args.stop_on_failure:
                 break
@@ -324,22 +304,36 @@ def main() -> int:
                 )
             )
 
+            print(f"  Java run completed in {duration:.4f}s.")
+            print(f"  Patron metrics computed for {patron_count} patrons.")
+            print(f"    {patron_data_file}")
+            print(f"    {patron_metrics_file}")
+
+        except Exception as exc:
+            failures += 1
+            print(
+                f"  FAILED while computing patron metrics: {exc}",
+                file=sys.stderr,
+            )
+
+            if args.stop_on_failure:
+                break
+
+            continue
+
+        try:
             stats_file = compute_stats_metrics_for_file(
                 results_dir=results_dir,
                 file_name=experiment.file_name,
             )
 
-            print(f"  Java run completed in {duration:.4f}s.")
-            print(f"  Patron metrics computed for {patron_count} patrons.")
-            print(f"    {patron_data_file}")
-            print(f"    {patron_metrics_file}")
             print(f"  Stat metrics written:")
             print(f"    {stats_file}")
 
         except Exception as exc:
             failures += 1
             print(
-                f"  FAILED while computing patron/stat metrics: {exc}",
+                f"  FAILED while computing stat metrics: {exc}",
                 file=sys.stderr,
             )
 

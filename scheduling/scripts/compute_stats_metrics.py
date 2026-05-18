@@ -1,23 +1,16 @@
-
 """
 compute_stats_metrics.py
 
 Helper module only.
 
-This file computes run-level statistics from:
-    results/OrderData/<ALG>_<noPatrons>_<seed>.txt
-    results/OrderMetrics/<ALG>_<noPatrons>_<seed>.txt
+Computes one simple run-level statistics file from:
     results/PatronData/<ALG>_<noPatrons>_<seed>.txt
     results/PatronMetrics/<ALG>_<noPatrons>_<seed>.txt
 
 Generated output:
     results/StatMetrics/<ALG>_<noPatrons>_<seed>.txt
 
-It intentionally has:
-    - no main()
-    - no argparse
-    - no command-line interface
-    - no log creation
+No main(). No argparse. No logs.
 """
 
 from __future__ import annotations
@@ -25,8 +18,21 @@ from __future__ import annotations
 import csv
 import math
 from pathlib import Path
-from statistics import median
 from typing import Any
+
+
+REQUIRED_PATRON_DATA_COLUMNS = [
+    "patron_id",
+    "num_of_drinks",
+    "last_order_completion_time",
+]
+
+REQUIRED_PATRON_METRIC_COLUMNS = [
+    "patron_id",
+    "total_waiting_time",
+    "total_response_time",
+    "total_turnaround_time",
+]
 
 
 def read_tsv(path: Path) -> list[dict[str, str]]:
@@ -57,33 +63,97 @@ def require_columns(rows: list[dict[str, str]], required: list[str], path: Path)
         )
 
 
-def values_as_float(rows: list[dict[str, str]], column: str) -> list[float]:
-    return [float(row[column]) for row in rows]
+def values_as_float(rows: list[dict[str, str]], column: str, path: Path) -> list[float]:
+    values: list[float] = []
+
+    for line_number, row in enumerate(rows, start=2):
+        raw_value = row.get(column, "")
+
+        try:
+            values.append(float(raw_value))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid number in {path}, line {line_number}, "
+                f"column {column!r}: {raw_value!r}"
+            ) from exc
+
+    return values
 
 
-def mean(values: list[float]) -> float:
-    if not values:
-        return 0.0
+def values_as_int(rows: list[dict[str, str]], column: str, path: Path) -> list[int]:
+    values: list[int] = []
 
-    return sum(values) / len(values)
+    for line_number, row in enumerate(rows, start=2):
+        raw_value = row.get(column, "")
+
+        try:
+            values.append(int(raw_value))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid integer in {path}, line {line_number}, "
+                f"column {column!r}: {raw_value!r}"
+            ) from exc
+
+    return values
+
+
+def average(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def minimum(values: list[float]) -> float:
+    return min(values) if values else 0.0
+
+
+def maximum(values: list[float]) -> float:
+    return max(values) if values else 0.0
 
 
 def population_std(values: list[float]) -> float:
     if not values:
         return 0.0
 
-    avg = mean(values)
+    avg = average(values)
     variance = sum((value - avg) ** 2 for value in values) / len(values)
     return math.sqrt(variance)
 
 
 def coefficient_of_variation(values: list[float]) -> float:
-    avg = mean(values)
+    avg = average(values)
 
     if avg == 0:
         return 0.0
 
     return population_std(values) / avg
+
+
+def predictability_ratio(values: list[float]) -> float:
+    """
+    Predictability based on variation in patrons' total waiting time.
+
+    1.0 = perfectly predictable.
+    Lower = more variable.
+    """
+    return 1.0 / (1.0 + coefficient_of_variation(values))
+
+
+def fairness_ratio(values: list[float]) -> float:
+    """
+    Jain-style fairness ratio over patrons' total waiting times.
+
+    1.0 = equal waiting distribution.
+    Lower = less fair.
+    """
+    if not values:
+        return 0.0
+
+    total = sum(values)
+    squared_total = sum(value ** 2 for value in values)
+
+    if squared_total == 0:
+        return 1.0
+
+    return (total ** 2) / (len(values) * squared_total)
 
 
 def percentile(values: list[float], q: float) -> float:
@@ -106,150 +176,22 @@ def percentile(values: list[float], q: float) -> float:
     return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
 
 
-def metric_summary(values: list[float], prefix: str) -> dict[str, float]:
+def starvation_possibility(values: list[float]) -> float:
+    """
+    Fraction of patrons whose total waiting time is an outlier:
+        waiting_time > Q3 + 1.5 * IQR
+
+    This is starvation *risk*, not proof of infinite starvation.
+    """
     if not values:
-        return {
-            f"{prefix}_average": 0.0,
-            f"{prefix}_median": 0.0,
-            f"{prefix}_max": 0.0,
-            f"{prefix}_std": 0.0,
-            f"{prefix}_min": 0.0,
-            f"{prefix}_q1": 0.0,
-            f"{prefix}_q3": 0.0,
-        }
+        return 0.0
 
-    return {
-        f"{prefix}_average": mean(values),
-        f"{prefix}_median": float(median(values)),
-        f"{prefix}_max": max(values),
-        f"{prefix}_std": population_std(values),
-        f"{prefix}_min": min(values),
-        f"{prefix}_q1": percentile(values, 0.25),
-        f"{prefix}_q3": percentile(values, 0.75),
-    }
+    q1 = percentile(values, 0.25)
+    q3 = percentile(values, 0.75)
+    threshold = q3 + 1.5 * (q3 - q1)
 
-
-def fairness_from_total_waiting(total_waiting_times: list[float]) -> dict[str, float]:
-    """
-    Simple fairness over patrons:
-        lower std/range means waiting time was distributed more evenly.
-    """
-    if not total_waiting_times:
-        return {
-            "fairness_waiting_std": 0.0,
-            "fairness_waiting_range": 0.0,
-        }
-
-    return {
-        "fairness_waiting_std": population_std(total_waiting_times),
-        "fairness_waiting_range": max(total_waiting_times) - min(total_waiting_times),
-    }
-
-
-def throughput_metrics(
-    completed_orders: int,
-    completed_patrons: int,
-    final_completion_time_ms: float,
-) -> dict[str, float]:
-    if final_completion_time_ms <= 0:
-        return {
-            "throughput_orders_per_ms": 0.0,
-            "throughput_orders_per_second": 0.0,
-            "throughput_patrons_per_ms": 0.0,
-            "throughput_patrons_per_second": 0.0,
-        }
-
-    orders_per_ms = completed_orders / final_completion_time_ms
-    patrons_per_ms = completed_patrons / final_completion_time_ms
-
-    return {
-        "throughput_orders_per_ms": orders_per_ms,
-        "throughput_orders_per_second": orders_per_ms * 1000.0,
-        "throughput_patrons_per_ms": patrons_per_ms,
-        "throughput_patrons_per_second": patrons_per_ms * 1000.0,
-    }
-
-
-def predictability_metrics(
-    total_waiting_times: list[float],
-    total_response_times: list[float],
-    total_turnaround_times: list[float],
-    process_turnaround_times: list[float],
-) -> dict[str, float]:
-    """
-    Predictability = variability across patrons.
-    Lower coefficient of variation means more predictable behaviour.
-    """
-    return {
-        "predictability_waiting_cv": coefficient_of_variation(total_waiting_times),
-        "predictability_response_cv": coefficient_of_variation(total_response_times),
-        "predictability_total_turnaround_cv": coefficient_of_variation(total_turnaround_times),
-        "predictability_process_turnaround_cv": coefficient_of_variation(process_turnaround_times),
-    }
-
-
-def starvation_metrics(total_waiting_times: list[float]) -> dict[str, float]:
-    """
-    Finite simulations cannot prove permanent starvation.
-    This flags starvation risk using an outlier threshold:
-        threshold = Q3 + 1.5 * IQR
-    """
-    if not total_waiting_times:
-        return {
-            "starvation_threshold_total_waiting": 0.0,
-            "starvation_candidate_count": 0,
-            "starvation_candidate_rate": 0.0,
-            "starvation_max_to_median_waiting_ratio": 0.0,
-        }
-
-    q1 = percentile(total_waiting_times, 0.25)
-    q3 = percentile(total_waiting_times, 0.75)
-    iqr = q3 - q1
-    threshold = q3 + 1.5 * iqr
-
-    candidate_count = sum(1 for value in total_waiting_times if value > threshold)
-    candidate_rate = candidate_count / len(total_waiting_times)
-
-    max_wait = max(total_waiting_times)
-    median_wait = float(median(total_waiting_times))
-
-    if median_wait == 0:
-        max_to_median_ratio = 0.0 if max_wait == 0 else max_wait
-    else:
-        max_to_median_ratio = max_wait / median_wait
-
-    return {
-        "starvation_threshold_total_waiting": threshold,
-        "starvation_candidate_count": candidate_count,
-        "starvation_candidate_rate": candidate_rate,
-        "starvation_max_to_median_waiting_ratio": max_to_median_ratio,
-    }
-
-
-def parse_file_name(file_name: str) -> tuple[str, int, int]:
-    """
-    Parse file names like:
-        FCFS_10_4.txt
-        SJF_30_2.txt
-        PRIORITY_50_3.txt
-
-    Returns:
-        (algorithm, noPatrons, seed)
-    """
-    stem = Path(file_name).stem
-    parts = stem.split("_")
-
-    if len(parts) < 3:
-        raise ValueError(
-            f"Bad stats file name {file_name!r}. "
-            "Expected ALG_noPatrons_seed.txt"
-        )
-
-    algorithm = "_".join(parts[:-2])
-    no_patrons = int(parts[-2])
-    seed = int(parts[-1])
-
-    return algorithm, no_patrons, seed
+    candidates = sum(1 for value in values if value > threshold)
+    return candidates / len(values)
 
 
 def compute_stats_metrics_for_file(
@@ -257,22 +199,16 @@ def compute_stats_metrics_for_file(
     file_name: str,
 ) -> Path:
     """
-    Compute run-level StatMetrics for one experiment file.
+    Compute one simple StatMetrics file for one simulation run.
 
-    Returns:
-        path to generated StatMetrics file.
+    This uses PatronData + PatronMetrics only.
+    It does not re-read OrderData because PatronData already contains:
+        num_of_drinks
+        last_order_completion_time
     """
-    order_data_file = results_dir / "OrderData" / file_name
-    order_metrics_file = results_dir / "OrderMetrics" / file_name
     patron_data_file = results_dir / "PatronData" / file_name
     patron_metrics_file = results_dir / "PatronMetrics" / file_name
     stats_file = results_dir / "StatMetrics" / file_name
-
-    if not order_data_file.exists():
-        raise FileNotFoundError(f"Missing order data file: {order_data_file}")
-
-    if not order_metrics_file.exists():
-        raise FileNotFoundError(f"Missing order metrics file: {order_metrics_file}")
 
     if not patron_data_file.exists():
         raise FileNotFoundError(f"Missing patron data file: {patron_data_file}")
@@ -280,137 +216,86 @@ def compute_stats_metrics_for_file(
     if not patron_metrics_file.exists():
         raise FileNotFoundError(f"Missing patron metrics file: {patron_metrics_file}")
 
-    order_data_rows = read_tsv(order_data_file)
-    order_metric_rows = read_tsv(order_metrics_file)
     patron_data_rows = read_tsv(patron_data_file)
     patron_metric_rows = read_tsv(patron_metrics_file)
 
-    require_columns(
-        order_data_rows,
-        [
-            "primary_key",
-            "patron_arrival_time",
-            "drink_name",
-            "order_arrival_time",
-            "prepTime",
-            "order_completion_time",
-        ],
-        order_data_file,
-    )
+    require_columns(patron_data_rows, REQUIRED_PATRON_DATA_COLUMNS, patron_data_file)
+    require_columns(patron_metric_rows, REQUIRED_PATRON_METRIC_COLUMNS, patron_metrics_file)
 
-    require_columns(
-        order_metric_rows,
-        [
-            "primary_key",
-            "waiting_time",
-            "response_time",
-            "turnaround_time",
-        ],
-        order_metrics_file,
-    )
-
-    require_columns(
-        patron_data_rows,
-        [
-            "patron_id",
-            "patron_arrival_time",
-            "num_of_drinks",
-            "first_order_arrival_time",
-            "last_order_completion_time",
-            "total_prepTime",
-        ],
-        patron_data_file,
-    )
-
-    require_columns(
+    waiting_values = values_as_float(
         patron_metric_rows,
-        [
-            "patron_id",
-            "total_waiting_time",
-            "total_response_time",
-            "total_turnaround_time",
-            "process_turnaround_time",
-        ],
+        "total_waiting_time",
         patron_metrics_file,
     )
 
-    algorithm, no_patrons, seed = parse_file_name(file_name)
+    response_values = values_as_float(
+        patron_metric_rows,
+        "total_response_time",
+        patron_metrics_file,
+    )
 
-    completed_orders = len(order_data_rows)
-    completed_patrons = len(patron_data_rows)
+    turnaround_values = values_as_float(
+        patron_metric_rows,
+        "total_turnaround_time",
+        patron_metrics_file,
+    )
 
-    order_completion_times = values_as_float(order_data_rows, "order_completion_time")
-    final_completion_time_ms = max(order_completion_times) if order_completion_times else 0.0
+    num_drinks_values = values_as_int(
+        patron_data_rows,
+        "num_of_drinks",
+        patron_data_file,
+    )
 
-    total_waiting_times = values_as_float(patron_metric_rows, "total_waiting_time")
-    total_response_times = values_as_float(patron_metric_rows, "total_response_time")
-    total_turnaround_times = values_as_float(patron_metric_rows, "total_turnaround_time")
-    process_turnaround_times = values_as_float(patron_metric_rows, "process_turnaround_time")
+    completion_values = values_as_float(
+        patron_data_rows,
+        "last_order_completion_time",
+        patron_data_file,
+    )
+
+    completed_orders = sum(num_drinks_values)
+    final_completion_time = maximum(completion_values)
+
+    throughput_ratio = (
+        (completed_orders / final_completion_time) * 1000.0
+        if final_completion_time > 0
+        else 0.0
+    )
 
     row: dict[str, Any] = {
-        "algorithm": algorithm,
-        "noPatrons": no_patrons,
-        "seed": seed,
-        "completed_orders": completed_orders,
-        "completed_patrons": completed_patrons,
-        "final_completion_time_ms": final_completion_time_ms,
+        "avg_waiting_time": average(waiting_values),
+        "max_waiting_time": maximum(waiting_values),
+        "min_waiting_time": minimum(waiting_values),
+
+        "avg_response_time": average(response_values),
+        "max_response_time": maximum(response_values),
+        "min_response_time": minimum(response_values),
+
+        "avg_turnaround_time": average(turnaround_values),
+        "max_turnaround_time": maximum(turnaround_values),
+        "min_turnaround_time": minimum(turnaround_values),
+
+        "throughput_ratio": throughput_ratio,
+        "fairness_ratio": fairness_ratio(waiting_values),
+        "predictability_ratio": predictability_ratio(waiting_values),
+        "starvation_possibility": starvation_possibility(waiting_values),
     }
 
-    row.update(metric_summary(total_waiting_times, "patron_total_waiting_time"))
-    row.update(metric_summary(total_response_times, "patron_total_response_time"))
-    row.update(metric_summary(total_turnaround_times, "patron_total_turnaround_time"))
-    row.update(metric_summary(process_turnaround_times, "process_turnaround_time"))
+    formatted_row = {
+        key: f"{value:.4f}"
+        for key, value in row.items()
+    }
 
-    row.update(
-        throughput_metrics(
-            completed_orders=completed_orders,
-            completed_patrons=completed_patrons,
-            final_completion_time_ms=final_completion_time_ms,
-        )
-    )
-
-    row.update(
-        predictability_metrics(
-            total_waiting_times=total_waiting_times,
-            total_response_times=total_response_times,
-            total_turnaround_times=total_turnaround_times,
-            process_turnaround_times=process_turnaround_times,
-        )
-    )
-
-    row.update(fairness_from_total_waiting(total_waiting_times))
-    row.update(starvation_metrics(total_waiting_times))
-
-    formatted_row: dict[str, Any] = {}
-    for key, value in row.items():
-        if isinstance(value, float):
-            formatted_row[key] = f"{value:.4f}"
-        else:
-            formatted_row[key] = value
-
-    fieldnames = list(formatted_row.keys())
-
-    write_tsv(stats_file, fieldnames, [formatted_row])
+    write_tsv(stats_file, list(formatted_row.keys()), [formatted_row])
     return stats_file
 
 
 def compute_all_stats_metrics(results_dir: Path) -> list[Path]:
-    """
-    Compute StatMetrics for every .txt file in OrderData.
-    """
-    order_data_dir = results_dir / "OrderData"
+    patron_data_dir = results_dir / "PatronData"
 
-    if not order_data_dir.exists():
-        raise FileNotFoundError(f"Missing input directory: {order_data_dir}")
+    if not patron_data_dir.exists():
+        raise FileNotFoundError(f"Missing input directory: {patron_data_dir}")
 
-    output_files: list[Path] = []
-
-    for order_file in sorted(order_data_dir.glob("*.txt")):
-        output_files.append(
-            compute_stats_metrics_for_file(
-                results_dir=results_dir,
-                file_name=order_file.name,
-            )
-        )
-
-    return output_files
+    return [
+        compute_stats_metrics_for_file(results_dir=results_dir, file_name=patron_file.name)
+        for patron_file in sorted(patron_data_dir.glob("*.txt"))
+    ]
