@@ -17,6 +17,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Scanner;
 import java.util.concurrent.ConcurrentHashMap;
@@ -340,7 +341,7 @@ public class Barman extends Thread {
       
        
     private void recordCompletedOrder(DrinkOrder order) throws IOException {
-        synchronized (this) {
+        synchronized (Barman.class) {
             Locale csvLocale = Locale.US;
             String delimiter = "\t";
 
@@ -391,25 +392,17 @@ public class Barman extends Thread {
             File orderMetricsFile = new File(orderMetricsDir, fileName);
 
             // ------------------------------------------------------------
-            // 5. If these files belong to an older run with the same args,
-            // clear them before this run starts writing.
+            // 5. Clear this run's output files exactly once per JVM.
             //
-            // This protects manual runs such as:
-            // make run ARGS="16 2 0 1"
-            // being executed more than once without deleting results/.
+            // This is deliberately done inside this method because the rest
+            // of the Java files are off-limits. Without this, a manual rerun
+            // with the same args can append to old files and create duplicate
+            // primary keys. Tiny database, big clown shoes.
             // ------------------------------------------------------------
 
-            long simStart = SchedulingSimulation.simStartTime;
+            String cleanupKey = "barScheduling.cleanedOutput." + fileName;
 
-            boolean oldOrderDataFile = orderDataFile.exists()
-                    && simStart > 0
-                    && orderDataFile.lastModified() < simStart;
-
-            boolean oldOrderMetricsFile = orderMetricsFile.exists()
-                    && simStart > 0
-                    && orderMetricsFile.lastModified() < simStart;
-
-            if (oldOrderDataFile || oldOrderMetricsFile) {
+            if (System.getProperty(cleanupKey) == null) {
                 if (orderDataFile.exists() && !orderDataFile.delete()) {
                     throw new IOException("Could not delete old OrderData file: " + orderDataFile);
                 }
@@ -417,24 +410,32 @@ public class Barman extends Thread {
                 if (orderMetricsFile.exists() && !orderMetricsFile.delete()) {
                     throw new IOException("Could not delete old OrderMetrics file: " + orderMetricsFile);
                 }
+
+                System.setProperty(cleanupKey, "true");
             }
 
             // ------------------------------------------------------------
-            // 6. Create primary key: patronID_seqNum
+            // 6. Create primary key: patronID_uniqueOrderSeq
             //
-            // The old code counted rows in OrderData. That is fragile:
-            // if OrderData and OrderMetrics ever get out of sync, or if
-            // old files are appended to, duplicate keys can appear.
+            // Do NOT calculate the sequence by counting previous file rows.
+            // That was the bug farm. DrinkOrder already has a sequence number
+            // assigned by Barman.placeDrinkOrder(), and nextSequenceNumber()
+            // is synchronized. Use that existing unique state.
             //
-            // Safer rule:
-            // find the largest existing sequence number for this patron
-            // in BOTH files, then use max + 1.
+            // The sequence is unique per order in this simulation run, not
+            // necessarily 1, 2, 3 per patron. The patron id is still before
+            // the underscore, so the Python grouping logic still works.
             // ------------------------------------------------------------
 
             int patronId = order.getOrderer();
-            int maxSeqNum = 0;
-            String patronPrefix = patronId + "_";
+            long seqNum = order.getSequenceNumber() + 1;
+            String primaryKey = patronId + "_" + seqNum;
 
+            // Extra defensive check: if the candidate key somehow already
+            // exists in either file, keep advancing until it is unused.
+            // Under normal execution this should never trigger, but it stops
+            // corrupted/stale files from murdering the run again.
+            HashSet<String> existingKeys = new HashSet<>();
             File[] filesToScan = { orderDataFile, orderMetricsFile };
 
             for (File fileToScan : filesToScan) {
@@ -456,35 +457,17 @@ public class Barman extends Thread {
 
                         String[] parts = line.split(delimiter, -1);
 
-                        if (parts.length == 0) {
-                            continue;
-                        }
-
-                        String existingPrimaryKey = parts[0];
-
-                        if (!existingPrimaryKey.startsWith(patronPrefix)) {
-                            continue;
-                        }
-
-                        String seqText = existingPrimaryKey.substring(patronPrefix.length());
-
-                        try {
-                            int existingSeqNum = Integer.parseInt(seqText);
-
-                            if (existingSeqNum > maxSeqNum) {
-                                maxSeqNum = existingSeqNum;
-                            }
-
-                        } catch (NumberFormatException ignored) {
-                            // Ignore malformed keys from corrupted/partial lines.
-                            // The Python validator will still catch bad rows later.
+                        if (parts.length > 0 && !parts[0].isEmpty()) {
+                            existingKeys.add(parts[0]);
                         }
                     }
                 }
             }
 
-            int seqNum = maxSeqNum + 1;
-            String primaryKey = patronId + "_" + seqNum;
+            while (existingKeys.contains(primaryKey)) {
+                seqNum++;
+                primaryKey = patronId + "_" + seqNum;
+            }
 
             // ------------------------------------------------------------
             // 7. Get patron arrival time
@@ -509,6 +492,8 @@ public class Barman extends Thread {
             //
             // Subtract simStartTime to make them relative to simulation start.
             // ------------------------------------------------------------
+
+            long simStart = SchedulingSimulation.simStartTime;
 
             long orderArrivalTime = order.getArrivalTime() - simStart;
             long serviceStartTime = order.getServiceStartTime() - simStart;
