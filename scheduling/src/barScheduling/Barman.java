@@ -344,7 +344,7 @@ public class Barman extends Thread {
         String delimiter = "\t";
 
         // ------------------------------------------------------------
-        // 1. Create results directory if it does not exist
+        // 1. Create parent results directory
         // ------------------------------------------------------------
 
         File resultsDir = new File("results");
@@ -354,7 +354,7 @@ public class Barman extends Thread {
         }
 
         // ------------------------------------------------------------
-        // 2. Create OrderData directory if it does not exist
+        // 2. Create OrderData directory
         // ------------------------------------------------------------
 
         File orderDataDir = new File(resultsDir, "OrderData");
@@ -364,7 +364,7 @@ public class Barman extends Thread {
         }
 
         // ------------------------------------------------------------
-        // 3. Create ordermetrics_dir directory if it does not exist
+        // 3. Create ordermetrics_dir directory
         // ------------------------------------------------------------
 
         File orderMetricsDir = new File(resultsDir, "ordermetrics_dir");
@@ -374,9 +374,9 @@ public class Barman extends Thread {
         }
 
         // ------------------------------------------------------------
-        // 4. Build file names
-        // Format: algName_noPatrons_seed.txt
-        // Example: FCFS_30_30.txt
+        // 4. Build file name
+        // Format: Algorithm_noPatrons_seed.txt
+        // Example: FCFS_10_4.txt
         // ------------------------------------------------------------
 
         String fileName = schedulerName
@@ -390,8 +390,10 @@ public class Barman extends Thread {
         File orderMetricsFile = new File(orderMetricsDir, fileName);
 
         // ------------------------------------------------------------
-        // 5. Build primary key: patronID_seqNum
-        // Example: 5_3
+        // 5. Create primary key: patronID_seqNum
+        //
+        // Example:
+        // Patron 5's third drink = 5_3
         // ------------------------------------------------------------
 
         int patronId = order.getOrderer();
@@ -424,37 +426,71 @@ public class Barman extends Thread {
             }
         }
 
-        String orderPrimaryKey = patronId + "_" + seqNum;
+        String primaryKey = patronId + "_" + seqNum;
 
         // ------------------------------------------------------------
-        // 6. Extract relative timing values
+        // 6. Get patron arrival time
+        //
+        // This is the patron/process arrival time from SchedulingSimulation.
+        // It is already relative to the simulation start.
+        // ------------------------------------------------------------
+
+        int patronArrivalTime = -1;
+
+        if (SchedulingSimulation.arrivalTimes != null
+                && patronId >= 0
+                && patronId < SchedulingSimulation.arrivalTimes.length) {
+            patronArrivalTime = SchedulingSimulation.arrivalTimes[patronId];
+        }
+
+        // ------------------------------------------------------------
+        // 7. Get relative order-level times
+        //
+        // order.getArrivalTime(), getServiceStartTime(), and getCompletionTime()
+        // are absolute System.currentTimeMillis() values.
+        //
+        // Subtract simStartTime to make them relative to simulation start.
         // ------------------------------------------------------------
 
         long simStart = SchedulingSimulation.simStartTime;
 
-        long arrivalTime = order.getArrivalTime() - simStart;
+        long orderArrivalTime = order.getArrivalTime() - simStart;
         long serviceStartTime = order.getServiceStartTime() - simStart;
-        long completionTime = order.getCompletionTime() - simStart;
+        long orderCompletionTime = order.getCompletionTime() - simStart;
 
         long prepTime = order.getExecutionTime();
 
-        long waitingTime = serviceStartTime - arrivalTime;
-        long responseTime = serviceStartTime - arrivalTime;
-        long turnaroundTime = completionTime - arrivalTime;
+        // ------------------------------------------------------------
+        // 8. Compute order-level metrics
+        // ------------------------------------------------------------
+
+        long waitingTime = serviceStartTime - orderArrivalTime;
+        long responseTime = serviceStartTime - orderArrivalTime;
+        long turnaroundTime = orderCompletionTime - orderArrivalTime;
+
+        // ------------------------------------------------------------
+        // 9. Clean drink name for tab-separated text file
+        // ------------------------------------------------------------
 
         String drinkName = order.getDrinkName();
 
-        /*
-        * Remove tabs/newlines from drink names so the text table does not break.
-        */
         drinkName = drinkName.replace("\t", " ")
                             .replace("\n", " ")
                             .replace("\r", " ");
 
         // ------------------------------------------------------------
-        // 7. Append to OrderData file
+        // 10. Append to OrderData file
+        //
+        // File:
+        // results/OrderData/FCFS_10_4.txt
+        //
         // Columns:
-        // primary_key, drink_name, arrival_time, prepTime
+        // primary_key
+        // patron_arrival_time
+        // drink_name
+        // order_arrival_time
+        // prepTime
+        // order_completion_time
         // ------------------------------------------------------------
 
         boolean writeOrderHeader = !orderDataFile.exists() || orderDataFile.length() == 0;
@@ -463,29 +499,42 @@ public class Barman extends Thread {
             if (writeOrderHeader) {
                 writer.println(
                         "primary_key" + delimiter
+                        + "patron_arrival_time" + delimiter
                         + "drink_name" + delimiter
-                        + "arrival_time" + delimiter
-                        + "prepTime"
+                        + "order_arrival_time" + delimiter
+                        + "prepTime" + delimiter
+                        + "order_completion_time"
                 );
             }
 
             writer.printf(
                     csvLocale,
-                    "%s%s%s%s%d%s%d%n",
-                    orderPrimaryKey,
+                    "%s%s%d%s%s%s%d%s%d%s%d%n",
+                    primaryKey,
+                    delimiter,
+                    patronArrivalTime,
                     delimiter,
                     drinkName,
                     delimiter,
-                    arrivalTime,
+                    orderArrivalTime,
                     delimiter,
-                    prepTime
+                    prepTime,
+                    delimiter,
+                    orderCompletionTime
             );
         }
 
         // ------------------------------------------------------------
-        // 8. Append to ordermetrics_dir file
+        // 11. Append to ordermetrics_dir file
+        //
+        // File:
+        // results/ordermetrics_dir/FCFS_10_4.txt
+        //
         // Columns:
-        // primary_key, waiting_time, response_time, turnaround_time
+        // primary_key
+        // waiting_time
+        // response_time
+        // turnaround_time
         // ------------------------------------------------------------
 
         boolean writeMetricsHeader = !orderMetricsFile.exists() || orderMetricsFile.length() == 0;
@@ -503,7 +552,7 @@ public class Barman extends Thread {
             writer.printf(
                     csvLocale,
                     "%s%s%d%s%d%s%d%n",
-                    orderPrimaryKey,
+                    primaryKey,
                     delimiter,
                     waitingTime,
                     delimiter,
