@@ -340,226 +340,263 @@ public class Barman extends Thread {
       
        
     private void recordCompletedOrder(DrinkOrder order) throws IOException {
-        Locale csvLocale = Locale.US;
-        String delimiter = "\t";
+        synchronized (this) {
+            Locale csvLocale = Locale.US;
+            String delimiter = "\t";
 
-        // ------------------------------------------------------------
-        // 1. Create parent results directory
-        // ------------------------------------------------------------
+            // ------------------------------------------------------------
+            // 1. Create parent results directory
+            // ------------------------------------------------------------
 
-        File resultsDir = new File("results");
+            File resultsDir = new File("results");
 
-        if (!resultsDir.exists() && !resultsDir.mkdirs()) {
-            throw new IOException("Could not create results directory");
-        }
+            if (!resultsDir.exists() && !resultsDir.mkdirs()) {
+                throw new IOException("Could not create results directory");
+            }
 
-        // ------------------------------------------------------------
-        // 2. Create OrderData directory
-        // ------------------------------------------------------------
+            // ------------------------------------------------------------
+            // 2. Create OrderData directory
+            // ------------------------------------------------------------
 
-        File orderDataDir = new File(resultsDir, "OrderData");
+            File orderDataDir = new File(resultsDir, "OrderData");
 
-        if (!orderDataDir.exists() && !orderDataDir.mkdirs()) {
-            throw new IOException("Could not create OrderData directory");
-        }
+            if (!orderDataDir.exists() && !orderDataDir.mkdirs()) {
+                throw new IOException("Could not create OrderData directory");
+            }
 
-        // ------------------------------------------------------------
-        // 3. Create OrderMetrics directory
-        // ------------------------------------------------------------
+            // ------------------------------------------------------------
+            // 3. Create OrderMetrics directory
+            // ------------------------------------------------------------
 
-        File orderMetricsDir = new File(resultsDir, "OrderMetrics");
+            File orderMetricsDir = new File(resultsDir, "OrderMetrics");
 
-        if (!orderMetricsDir.exists() && !orderMetricsDir.mkdirs()) {
-            throw new IOException("Could not create OrderMetrics directory");
-        }
+            if (!orderMetricsDir.exists() && !orderMetricsDir.mkdirs()) {
+                throw new IOException("Could not create OrderMetrics directory");
+            }
 
-        // ------------------------------------------------------------
-        // 4. Build file name
-        // Format: Algorithm_noPatrons_seed.txt
-        // Example: FCFS_10_4.txt
-        // ------------------------------------------------------------
+            // ------------------------------------------------------------
+            // 4. Build file name
+            // Format: Algorithm_noPatrons_seed.txt
+            // Example: FCFS_10_4.txt
+            // ------------------------------------------------------------
 
-        String fileName = schedulerName
-                + "_"
-                + SchedulingSimulation.noPatrons
-                + "_"
-                + SchedulingSimulation.seed
-                + ".txt";
+            String fileName = schedulerName
+                    + "_"
+                    + SchedulingSimulation.noPatrons
+                    + "_"
+                    + SchedulingSimulation.seed
+                    + ".txt";
 
-        File orderDataFile = new File(orderDataDir, fileName);
-        File orderMetricsFile = new File(orderMetricsDir, fileName);
+            File orderDataFile = new File(orderDataDir, fileName);
+            File orderMetricsFile = new File(orderMetricsDir, fileName);
 
-        // ------------------------------------------------------------
-        // 5. Create primary key: patronID_seqNum
-        //
-        // Example:
-        // Patron 5's third drink = 5_3
-        // ------------------------------------------------------------
+            // ------------------------------------------------------------
+            // 5. If these files belong to an older run with the same args,
+            // clear them before this run starts writing.
+            //
+            // This protects manual runs such as:
+            // make run ARGS="16 2 0 1"
+            // being executed more than once without deleting results/.
+            // ------------------------------------------------------------
 
-        int patronId = order.getOrderer();
-        int seqNum = 1;
+            long simStart = SchedulingSimulation.simStartTime;
 
-        if (orderDataFile.exists()) {
-            try (Scanner scanner = new Scanner(orderDataFile)) {
-                if (scanner.hasNextLine()) {
-                    scanner.nextLine(); // skip header
+            boolean oldOrderDataFile = orderDataFile.exists()
+                    && simStart > 0
+                    && orderDataFile.lastModified() < simStart;
+
+            boolean oldOrderMetricsFile = orderMetricsFile.exists()
+                    && simStart > 0
+                    && orderMetricsFile.lastModified() < simStart;
+
+            if (oldOrderDataFile || oldOrderMetricsFile) {
+                if (orderDataFile.exists() && !orderDataFile.delete()) {
+                    throw new IOException("Could not delete old OrderData file: " + orderDataFile);
                 }
 
-                while (scanner.hasNextLine()) {
-                    String line = scanner.nextLine().trim();
+                if (orderMetricsFile.exists() && !orderMetricsFile.delete()) {
+                    throw new IOException("Could not delete old OrderMetrics file: " + orderMetricsFile);
+                }
+            }
 
-                    if (line.isEmpty()) {
-                        continue;
+            // ------------------------------------------------------------
+            // 6. Create primary key: patronID_seqNum
+            //
+            // The old code counted rows in OrderData. That is fragile:
+            // if OrderData and OrderMetrics ever get out of sync, or if
+            // old files are appended to, duplicate keys can appear.
+            //
+            // Safer rule:
+            // find the largest existing sequence number for this patron
+            // in BOTH files, then use max + 1.
+            // ------------------------------------------------------------
+
+            int patronId = order.getOrderer();
+            int maxSeqNum = 0;
+            String patronPrefix = patronId + "_";
+
+            File[] filesToScan = { orderDataFile, orderMetricsFile };
+
+            for (File fileToScan : filesToScan) {
+                if (!fileToScan.exists()) {
+                    continue;
+                }
+
+                try (Scanner scanner = new Scanner(fileToScan)) {
+                    if (scanner.hasNextLine()) {
+                        scanner.nextLine(); // skip header
                     }
 
-                    String[] parts = line.split(delimiter, -1);
+                    while (scanner.hasNextLine()) {
+                        String line = scanner.nextLine().trim();
 
-                    if (parts.length > 0) {
-                        String primaryKey = parts[0];
-                        String patronPrefix = patronId + "_";
+                        if (line.isEmpty()) {
+                            continue;
+                        }
 
-                        if (primaryKey.startsWith(patronPrefix)) {
-                            seqNum++;
+                        String[] parts = line.split(delimiter, -1);
+
+                        if (parts.length == 0) {
+                            continue;
+                        }
+
+                        String existingPrimaryKey = parts[0];
+
+                        if (!existingPrimaryKey.startsWith(patronPrefix)) {
+                            continue;
+                        }
+
+                        String seqText = existingPrimaryKey.substring(patronPrefix.length());
+
+                        try {
+                            int existingSeqNum = Integer.parseInt(seqText);
+
+                            if (existingSeqNum > maxSeqNum) {
+                                maxSeqNum = existingSeqNum;
+                            }
+
+                        } catch (NumberFormatException ignored) {
+                            // Ignore malformed keys from corrupted/partial lines.
+                            // The Python validator will still catch bad rows later.
                         }
                     }
                 }
             }
-        }
 
-        String primaryKey = patronId + "_" + seqNum;
+            int seqNum = maxSeqNum + 1;
+            String primaryKey = patronId + "_" + seqNum;
 
-        // ------------------------------------------------------------
-        // 6. Get patron arrival time
-        //
-        // This is the patron/process arrival time from SchedulingSimulation.
-        // It is already relative to the simulation start.
-        // ------------------------------------------------------------
+            // ------------------------------------------------------------
+            // 7. Get patron arrival time
+            //
+            // This is the patron/process arrival time from SchedulingSimulation.
+            // It is already relative to the simulation start.
+            // ------------------------------------------------------------
 
-        int patronArrivalTime = -1;
+            int patronArrivalTime = -1;
 
-        if (SchedulingSimulation.arrivalTimes != null
-                && patronId >= 0
-                && patronId < SchedulingSimulation.arrivalTimes.length) {
-            patronArrivalTime = SchedulingSimulation.arrivalTimes[patronId];
-        }
+            if (SchedulingSimulation.arrivalTimes != null
+                    && patronId >= 0
+                    && patronId < SchedulingSimulation.arrivalTimes.length) {
+                patronArrivalTime = SchedulingSimulation.arrivalTimes[patronId];
+            }
 
-        // ------------------------------------------------------------
-        // 7. Get relative order-level times
-        //
-        // order.getArrivalTime(), getServiceStartTime(), and getCompletionTime()
-        // are absolute System.currentTimeMillis() values.
-        //
-        // Subtract simStartTime to make them relative to simulation start.
-        // ------------------------------------------------------------
+            // ------------------------------------------------------------
+            // 8. Get relative order-level times
+            //
+            // order.getArrivalTime(), getServiceStartTime(), and getCompletionTime()
+            // are absolute System.currentTimeMillis() values.
+            //
+            // Subtract simStartTime to make them relative to simulation start.
+            // ------------------------------------------------------------
 
-        long simStart = SchedulingSimulation.simStartTime;
+            long orderArrivalTime = order.getArrivalTime() - simStart;
+            long serviceStartTime = order.getServiceStartTime() - simStart;
+            long orderCompletionTime = order.getCompletionTime() - simStart;
 
-        long orderArrivalTime = order.getArrivalTime() - simStart;
-        long serviceStartTime = order.getServiceStartTime() - simStart;
-        long orderCompletionTime = order.getCompletionTime() - simStart;
+            long prepTime = order.getExecutionTime();
 
-        long prepTime = order.getExecutionTime();
+            // ------------------------------------------------------------
+            // 9. Compute order-level metrics
+            // ------------------------------------------------------------
 
-        // ------------------------------------------------------------
-        // 8. Compute order-level metrics
-        // ------------------------------------------------------------
+            long waitingTime = serviceStartTime - orderArrivalTime;
+            long responseTime = serviceStartTime - orderArrivalTime;
+            long turnaroundTime = orderCompletionTime - orderArrivalTime;
 
-        long waitingTime = serviceStartTime - orderArrivalTime;
-        long responseTime = serviceStartTime - orderArrivalTime;
-        long turnaroundTime = orderCompletionTime - orderArrivalTime;
+            // ------------------------------------------------------------
+            // 10. Clean drink name for tab-separated text file
+            // ------------------------------------------------------------
 
-        // ------------------------------------------------------------
-        // 9. Clean drink name for tab-separated text file
-        // ------------------------------------------------------------
+            String drinkName = order.getDrinkName();
 
-        String drinkName = order.getDrinkName();
+            drinkName = drinkName.replace("\t", " ")
+                                .replace("\n", " ")
+                                .replace("\r", " ");
 
-        drinkName = drinkName.replace("\t", " ")
-                            .replace("\n", " ")
-                            .replace("\r", " ");
+            // ------------------------------------------------------------
+            // 11. Append to OrderData file
+            // ------------------------------------------------------------
 
-        // ------------------------------------------------------------
-        // 10. Append to OrderData file
-        //
-        // File:
-        // results/OrderData/FCFS_10_4.txt
-        //
-        // Columns:
-        // primary_key
-        // patron_arrival_time
-        // drink_name
-        // order_arrival_time
-        // prepTime
-        // order_completion_time
-        // ------------------------------------------------------------
+            boolean writeOrderHeader = !orderDataFile.exists() || orderDataFile.length() == 0;
 
-        boolean writeOrderHeader = !orderDataFile.exists() || orderDataFile.length() == 0;
+            try (PrintWriter writer = new PrintWriter(new FileWriter(orderDataFile, true))) {
+                if (writeOrderHeader) {
+                    writer.println(
+                            "primary_key" + delimiter
+                            + "patron_arrival_time" + delimiter
+                            + "drink_name" + delimiter
+                            + "order_arrival_time" + delimiter
+                            + "prepTime" + delimiter
+                            + "order_completion_time"
+                    );
+                }
 
-        try (PrintWriter writer = new PrintWriter(new FileWriter(orderDataFile, true))) {
-            if (writeOrderHeader) {
-                writer.println(
-                        "primary_key" + delimiter
-                        + "patron_arrival_time" + delimiter
-                        + "drink_name" + delimiter
-                        + "order_arrival_time" + delimiter
-                        + "prepTime" + delimiter
-                        + "order_completion_time"
+                writer.printf(
+                        csvLocale,
+                        "%s%s%d%s%s%s%d%s%d%s%d%n",
+                        primaryKey,
+                        delimiter,
+                        patronArrivalTime,
+                        delimiter,
+                        drinkName,
+                        delimiter,
+                        orderArrivalTime,
+                        delimiter,
+                        prepTime,
+                        delimiter,
+                        orderCompletionTime
                 );
             }
 
-            writer.printf(
-                    csvLocale,
-                    "%s%s%d%s%s%s%d%s%d%s%d%n",
-                    primaryKey,
-                    delimiter,
-                    patronArrivalTime,
-                    delimiter,
-                    drinkName,
-                    delimiter,
-                    orderArrivalTime,
-                    delimiter,
-                    prepTime,
-                    delimiter,
-                    orderCompletionTime
-            );
-        }
+            // ------------------------------------------------------------
+            // 12. Append to OrderMetrics file
+            // ------------------------------------------------------------
 
-        // ------------------------------------------------------------
-        // 11. Append to ordermetrics_dir file
-        //
-        // File:
-        // results/ordermetrics_dir/FCFS_10_4.txt
-        //
-        // Columns:
-        // primary_key
-        // waiting_time
-        // response_time
-        // turnaround_time
-        // ------------------------------------------------------------
+            boolean writeMetricsHeader = !orderMetricsFile.exists() || orderMetricsFile.length() == 0;
 
-        boolean writeMetricsHeader = !orderMetricsFile.exists() || orderMetricsFile.length() == 0;
+            try (PrintWriter writer = new PrintWriter(new FileWriter(orderMetricsFile, true))) {
+                if (writeMetricsHeader) {
+                    writer.println(
+                            "primary_key" + delimiter
+                            + "waiting_time" + delimiter
+                            + "response_time" + delimiter
+                            + "turnaround_time"
+                    );
+                }
 
-        try (PrintWriter writer = new PrintWriter(new FileWriter(orderMetricsFile, true))) {
-            if (writeMetricsHeader) {
-                writer.println(
-                        "primary_key" + delimiter
-                        + "waiting_time" + delimiter
-                        + "response_time" + delimiter
-                        + "turnaround_time"
+                writer.printf(
+                        csvLocale,
+                        "%s%s%d%s%d%s%d%n",
+                        primaryKey,
+                        delimiter,
+                        waitingTime,
+                        delimiter,
+                        responseTime,
+                        delimiter,
+                        turnaroundTime
                 );
             }
-
-            writer.printf(
-                    csvLocale,
-                    "%s%s%d%s%d%s%d%n",
-                    primaryKey,
-                    delimiter,
-                    waitingTime,
-                    delimiter,
-                    responseTime,
-                    delimiter,
-                    turnaroundTime
-            );
         }
     }
 }

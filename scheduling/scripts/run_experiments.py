@@ -8,11 +8,10 @@ It runs the full set of scheduling simulation experiments, then calls helper
 modules after each successful Java run.
 
 Important behaviour:
-    - No per-run terminal spam.
-    - No stdout/stderr log files for successful runs.
-    - Failure logs are created only when a run fails.
-    - Each planned simulation starts with its own output files deleted first.
-      This prevents duplicate primary keys caused by appending to old files.
+    - At the start of a real run, results/ is deleted and recreated.
+    - make run ARGS output is NOT captured or hidden. It prints normally.
+    - This script only controls its own final status output.
+    - Failure logs are created only when a failure occurs.
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ import random
 import shutil
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,7 +68,6 @@ class Experiment:
 
     @property
     def log_file_name(self) -> str:
-        # User requested exact format: alg_noPatrons_seed
         return f"{self.scheduler_name}_{self.no_patrons}_{self.seed}"
 
 
@@ -105,12 +102,6 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--force-clean",
-        action="store_true",
-        help="Delete the entire results/ directory before running.",
-    )
-
-    parser.add_argument(
         "--stop-on-failure",
         action="store_true",
         help="Stop immediately after the first failed run.",
@@ -139,9 +130,8 @@ def choose_no_patrons(
     return sorted(rng.sample(population, sample_count))
 
 
-def build_experiments(args: argparse.Namespace) -> tuple[list[Experiment], dict[int, list[int]]]:
+def build_experiments(args: argparse.Namespace) -> list[Experiment]:
     experiments: list[Experiment] = []
-    selected_no_patrons_by_seed: dict[int, list[int]] = {}
 
     for seed in range(args.seed_start, args.seed_end + 1):
         selected_no_patrons = choose_no_patrons(
@@ -150,8 +140,6 @@ def build_experiments(args: argparse.Namespace) -> tuple[list[Experiment], dict[
             max_patrons=args.max_patrons,
             sample_count=args.samples_per_seed,
         )
-
-        selected_no_patrons_by_seed[seed] = selected_no_patrons
 
         for scheduler_code in range(args.sched_start, args.sched_end + 1):
             scheduler_name = SCHEDULER_NAMES.get(
@@ -170,7 +158,7 @@ def build_experiments(args: argparse.Namespace) -> tuple[list[Experiment], dict[
                     )
                 )
 
-    return experiments, selected_no_patrons_by_seed
+    return experiments
 
 
 def ensure_results_dirs(results_dir: Path) -> None:
@@ -181,51 +169,22 @@ def ensure_results_dirs(results_dir: Path) -> None:
 
 
 def reset_results_dir(results_dir: Path) -> None:
+    """
+    Force clean the whole results directory at the start of the experiment batch.
+    """
     if results_dir.exists():
         shutil.rmtree(results_dir)
 
     ensure_results_dirs(results_dir)
 
 
-def output_files_for_experiment(results_dir: Path, experiment: Experiment) -> list[Path]:
-    file_name = experiment.file_name
-
-    return [
-        results_dir / "OrderData" / file_name,
-        results_dir / "OrderMetrics" / file_name,
-        results_dir / "PatronData" / file_name,
-        results_dir / "PatronMetrics" / file_name,
-        results_dir / "StatMetrics" / file_name,
-    ]
-
-
-def clear_experiment_outputs(results_dir: Path, experiment: Experiment) -> None:
+def clear_existing_failure_logs(logs_dir: Path) -> None:
     """
-    Delete only this experiment's output files before the Java run.
-
-    This is the important duplicate-key fix.
-
-    Your Java writer appends. That is fine for a fresh file, but poisonous if the
-    same alg/noPatrons/seed file already exists from a previous attempt. Deleting
-    the planned files before each run guarantees that patronID_seqNum starts from
-    a clean file and does not collide with stale rows.
+    Clear old failure logs at the start of the experiment batch.
+    The directory is only recreated when a new failure occurs.
     """
-    for output_file in output_files_for_experiment(results_dir, experiment):
-        if output_file.exists():
-            output_file.unlink()
-
-
-def clear_experiment_log(logs_dir: Path, experiment: Experiment) -> None:
-    """
-    Remove an old failure log for this experiment before retrying it.
-
-    Otherwise a previous failure can leave a stale log even if the current run
-    succeeds. That is how debugging becomes archaeology.
-    """
-    log_path = logs_dir / experiment.log_file_name
-
-    if log_path.exists():
-        log_path.unlink()
+    if logs_dir.exists():
+        shutil.rmtree(logs_dir)
 
 
 def write_failure_log(
@@ -237,8 +196,8 @@ def write_failure_log(
     """
     Create a per-run failure log.
 
-    A log file is created only when a failure occurs.
-    If multiple failures happen in the same run, they are appended.
+    File name format:
+        alg_noPatrons_seed
     """
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -262,31 +221,22 @@ def write_failure_log(
 def run_java_experiment(
     experiment: Experiment,
     project_root: Path,
-    dry_run: bool,
-) -> tuple[int, float, str, str]:
+) -> int:
+    """
+    Run Java simulation.
+
+    Output is intentionally not captured, so make/java prints normally.
+    """
     command = ["make", "run", f"ARGS={experiment.args_string}"]
-
-    if dry_run:
-        return 0, 0.0, "", ""
-
-    start = time.perf_counter()
 
     completed = subprocess.run(
         command,
         cwd=project_root,
         text=True,
-        capture_output=True,
         check=False,
     )
 
-    duration = time.perf_counter() - start
-
-    return (
-        completed.returncode,
-        duration,
-        completed.stdout,
-        completed.stderr,
-    )
+    return completed.returncode
 
 
 def main() -> int:
@@ -297,56 +247,54 @@ def main() -> int:
     logs_dir = project_root / "logs"
 
     if not project_root.exists():
-        print(f"Completed with 1 failed attempt. Project root does not exist: {project_root}", file=sys.stderr)
+        print(
+            f"Completed with 1 failed attempt. Project root does not exist: {project_root}",
+            file=sys.stderr,
+        )
         return 1
 
     makefile = project_root / "Makefile"
 
     if not makefile.exists() and not args.dry_run:
-        print(f"Completed with 1 failed attempt. Makefile not found at {makefile}", file=sys.stderr)
+        print(
+            f"Completed with 1 failed attempt. Makefile not found at {makefile}",
+            file=sys.stderr,
+        )
         return 1
 
     try:
-        experiments, _selected_no_patrons_by_seed = build_experiments(args)
+        experiments = build_experiments(args)
     except Exception as exc:
-        print(f"Completed with 1 failed attempt. Could not build experiment plan: {exc}", file=sys.stderr)
+        print(
+            f"Completed with 1 failed attempt. Could not build experiment plan: {exc}",
+            file=sys.stderr,
+        )
         return 1
 
     if args.dry_run:
         print(f"Dry run completed successfully. Planned {len(experiments)} simulation run(s).")
         return 0
 
-    if args.force_clean:
-        reset_results_dir(results_dir)
-    else:
-        ensure_results_dirs(results_dir)
+    # Force clean before running any combinations.
+    reset_results_dir(results_dir)
+    clear_existing_failure_logs(logs_dir)
 
     failures = 0
 
     for experiment in experiments:
-        clear_experiment_outputs(results_dir, experiment)
-        clear_experiment_log(logs_dir, experiment)
-
-        return_code, _duration, stdout_text, stderr_text = run_java_experiment(
+        return_code = run_java_experiment(
             experiment=experiment,
             project_root=project_root,
-            dry_run=False,
         )
 
         if return_code != 0:
             failures += 1
 
-            error_message = (
-                f"Java run failed with return code {return_code}.\n\n"
-                f"stdout:\n{stdout_text}\n\n"
-                f"stderr:\n{stderr_text}"
-            )
-
             write_failure_log(
                 logs_dir=logs_dir,
                 experiment=experiment,
                 stage="java_run",
-                message=error_message,
+                message=f"Java run failed with return code {return_code}.",
             )
 
             if args.stop_on_failure:
