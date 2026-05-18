@@ -364,13 +364,13 @@ public class Barman extends Thread {
         }
 
         // ------------------------------------------------------------
-        // 3. Create ordermetrics_dir directory
+        // 3. Create OrderMetrics directory
         // ------------------------------------------------------------
 
-        File orderMetricsDir = new File(resultsDir, "ordermetrics_dir");
+        File orderMetricsDir = new File(resultsDir, "OrderMetrics");
 
         if (!orderMetricsDir.exists() && !orderMetricsDir.mkdirs()) {
-            throw new IOException("Could not create ordermetrics_dir directory");
+            throw new IOException("Could not create OrderMetrics directory");
         }
 
         // ------------------------------------------------------------
