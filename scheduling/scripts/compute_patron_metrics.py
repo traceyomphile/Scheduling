@@ -1,10 +1,11 @@
+
 """
 compute_patron_metrics.py
 
 Helper module only.
 
-This file contains the logic for computing patron-level data and patron-level
-metrics from order-level result files.
+This file computes patron-level data and patron-level metrics from
+order-level result files.
 
 It intentionally has:
     - no main()
@@ -102,14 +103,6 @@ def to_int(value: str, column_name: str, primary_key: str, file_path: Path) -> i
             f"Invalid integer in {file_path}: "
             f"primary_key={primary_key}, column={column_name}, value={value!r}"
         ) from exc
-
-
-def safe_average(total: int, count: int) -> float:
-    """Avoid division by zero when calculating averages."""
-    if count == 0:
-        return 0.0
-
-    return total / count
 
 
 def compute_patron_metrics_for_file(
@@ -234,9 +227,6 @@ def compute_patron_metrics_for_file(
                 "total_waiting_time": 0,
                 "total_response_time": 0,
                 "total_turnaround_time": 0,
-                "max_waiting_time": waiting_time,
-                "max_response_time": response_time,
-                "max_turnaround_time": turnaround_time,
             }
 
         patron = patrons[patron_id]
@@ -274,31 +264,11 @@ def compute_patron_metrics_for_file(
             int(patron["total_turnaround_time"]) + turnaround_time
         )
 
-        patron["max_waiting_time"] = max(
-            int(patron["max_waiting_time"]),
-            waiting_time,
-        )
-
-        patron["max_response_time"] = max(
-            int(patron["max_response_time"]),
-            response_time,
-        )
-
-        patron["max_turnaround_time"] = max(
-            int(patron["max_turnaround_time"]),
-            turnaround_time,
-        )
-
     patron_data_rows: list[dict[str, Any]] = []
     patron_metric_rows: list[dict[str, Any]] = []
 
     for patron_id in sorted(patrons):
         patron = patrons[patron_id]
-
-        num_of_drinks = int(patron["num_of_drinks"])
-        total_waiting_time = int(patron["total_waiting_time"])
-        total_response_time = int(patron["total_response_time"])
-        total_turnaround_time = int(patron["total_turnaround_time"])
 
         process_turnaround_time = (
             int(patron["last_order_completion_time"])
@@ -309,7 +279,7 @@ def compute_patron_metrics_for_file(
             {
                 "patron_id": patron_id,
                 "patron_arrival_time": patron["patron_arrival_time"],
-                "num_of_drinks": num_of_drinks,
+                "num_of_drinks": patron["num_of_drinks"],
                 "first_order_arrival_time": patron["first_order_arrival_time"],
                 "last_order_completion_time": patron["last_order_completion_time"],
                 "total_prepTime": patron["total_prepTime"],
@@ -319,16 +289,10 @@ def compute_patron_metrics_for_file(
         patron_metric_rows.append(
             {
                 "patron_id": patron_id,
-                "total_waiting_time": total_waiting_time,
-                "total_response_time": total_response_time,
-                "total_turnaround_time": total_turnaround_time,
+                "total_waiting_time": patron["total_waiting_time"],
+                "total_response_time": patron["total_response_time"],
+                "total_turnaround_time": patron["total_turnaround_time"],
                 "process_turnaround_time": process_turnaround_time,
-                "average_waiting_time": f"{safe_average(total_waiting_time, num_of_drinks):.4f}",
-                "average_response_time": f"{safe_average(total_response_time, num_of_drinks):.4f}",
-                "average_turnaround_time": f"{safe_average(total_turnaround_time, num_of_drinks):.4f}",
-                "max_waiting_time": patron["max_waiting_time"],
-                "max_response_time": patron["max_response_time"],
-                "max_turnaround_time": patron["max_turnaround_time"],
             }
         )
 
@@ -353,12 +317,6 @@ def compute_patron_metrics_for_file(
             "total_response_time",
             "total_turnaround_time",
             "process_turnaround_time",
-            "average_waiting_time",
-            "average_response_time",
-            "average_turnaround_time",
-            "max_waiting_time",
-            "max_response_time",
-            "max_turnaround_time",
         ],
         patron_metric_rows,
     )

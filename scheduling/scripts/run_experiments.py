@@ -1,11 +1,12 @@
+
 #!/usr/bin/env python3
 """
 run_experiments.py
 
 This is the only script with a main() function.
 
-It runs the full set of simulation experiments, then calls the patron metric
-helper after each successful Java run.
+It runs the full set of simulation experiments, then calls helper modules after
+each successful Java run.
 
 Project layout expected:
 
@@ -14,7 +15,8 @@ Project layout expected:
     ├── results/
     └── scripts/
         ├── run_experiments.py
-        └── compute_patron_metrics.py
+        ├── compute_patron_metrics.py
+        └── compute_stats_metrics.py
 
 Experiment design:
     sched in [0, 3]
@@ -28,13 +30,6 @@ Java command:
 No log files are created.
 No selected_noPatrons file is created.
 Progress is printed to the terminal only.
-
-Run script:
-    python results/scripts/run_experiments.py
-Dry run:
-    python results/scripts/run_experiments.py --dry-run
-Clean run:
-    python results/scripts/run_experiments.py --force-clean
 """
 
 from __future__ import annotations
@@ -49,6 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from compute_patron_metrics import compute_patron_metrics_for_file
+from compute_stats_metrics import compute_stats_metrics_for_file
 
 
 SCHEDULER_NAMES = {
@@ -95,7 +91,7 @@ def parse_args() -> argparse.Namespace:
     default_project_root = script_path.parents[1]
 
     parser = argparse.ArgumentParser(
-        description="Run scheduling experiments and compute patron metrics."
+        description="Run scheduling experiments and compute patron/stat metrics."
     )
 
     parser.add_argument(
@@ -197,6 +193,7 @@ def output_files_for_experiment(results_dir: Path, experiment: Experiment) -> li
         results_dir / "OrderMetrics" / file_name,
         results_dir / "PatronData" / file_name,
         results_dir / "PatronMetrics" / file_name,
+        results_dir / "StatMetrics" / file_name,
     ]
 
 
@@ -327,15 +324,22 @@ def main() -> int:
                 )
             )
 
+            stats_file = compute_stats_metrics_for_file(
+                results_dir=results_dir,
+                file_name=experiment.file_name,
+            )
+
             print(f"  Java run completed in {duration:.4f}s.")
             print(f"  Patron metrics computed for {patron_count} patrons.")
             print(f"    {patron_data_file}")
             print(f"    {patron_metrics_file}")
+            print(f"  Stat metrics written:")
+            print(f"    {stats_file}")
 
         except Exception as exc:
             failures += 1
             print(
-                f"  FAILED while computing patron metrics: {exc}",
+                f"  FAILED while computing patron/stat metrics: {exc}",
                 file=sys.stderr,
             )
 
