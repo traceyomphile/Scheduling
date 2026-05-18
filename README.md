@@ -110,6 +110,7 @@ Extending or debugging
 
 Contact / Author
 - Author: M. M. Kuttel (see header in `SchedulingSimulation.java`).
+- Additional author: Tracey Letlape.
 
 License
 - No license file included — treat this as course assignment code. Contact the author for reuse permissions.
