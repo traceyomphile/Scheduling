@@ -1,0 +1,2 @@
+avg_waiting_time	median_waiting_time	std_waiting_time	max_waiting_time	min_waiting_time	avg_response_time	median_response_time	std_response_time	max_response_time	min_response_time	avg_turnaround_time	median_turnaround_time	std_turnaround_time	max_turnaround_time	min_turnaround_time	throughput_ratio	fairness_ratio	predictability_ratio	starvation_possibility
+1154.7500	1282.0000	557.0470	1866.0000	264.0000	1154.7500	1282.0000	557.0470	1866.0000	264.0000	1454.5000	1686.0000	616.3282	2351.0000	642.0000	9.4869	0.8112	0.6746	0.0000
